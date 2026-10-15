@@ -1,0 +1,44 @@
+# 本地/内网部署编排
+#
+#   $env:DEEPSEEK_API_KEY="sk-..."      # PowerShell（或写进 .env，见下）
+#   docker compose up --build
+#   # 打开 http://127.0.0.1:8000/docs
+#
+# 设计要点：
+# - `ingest` 是一次性任务：建立 index.json 并预热模型缓存到具名卷，完成后进程退出。
+#   API 服务通过 service_completed_successfully 依赖它——因此首次 `up` 会自动建好索引，
+#   之后重启命中已有文件、秒级跳过，不会每次都重建。
+# - 模型缓存放在具名卷 rag-kb-cache：重建容器不会丢，避免反复下载约 2GB 权重。
+# - data/ 只读挂载：容器内不该修改知识库；改文档后重新执行 ingest 即可。
+
+services:
+  ingest:
+    build: .
+    command: ["python", "ingest.py"]
+    environment:
+      HF_HOME: /app/.cache/huggingface
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-not-needed-for-ingest}
+    volumes:
+      - rag-kb-cache:/app/.cache
+      - ./data:/app/data:ro
+    restart: "no"
+
+  api:
+    build: .
+    depends_on:
+      ingest:
+        condition: service_completed_successfully
+    environment:
+      HF_HOME: /app/.cache/huggingface
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?请先设置 DEEPSEEK_API_KEY}
+      # 想换配置就写进 .env：AUTH_MODE、CHAT_MODEL、TOOL_DEFAULT_TOP_K 等
+      AUTH_MODE: ${AUTH_MODE:-dev}
+    ports:
+      - "8000:8000"
+    volumes:
+      - rag-kb-cache:/app/.cache
+      - ./data:/app/data:ro
+    restart: unless-stopped
+
+volumes:
+  rag-kb-cache:

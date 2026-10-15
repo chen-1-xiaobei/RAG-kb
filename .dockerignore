@@ -1,0 +1,13 @@
+# 构建镜像时不需要的东西：模型缓存、生成的索引、虚拟环境与测试临时产物
+.venv/
+.git/
+.github/
+.cache/
+.pytest_cache/
+pytest-of-*/
+__pycache__/
+*.py[cod]
+index.json
+index.json.tmp
+.env
+eval-report.txt

@@ -1,0 +1,84 @@
+name: CI
+
+# 键名加引号：YAML 1.1 解析器会把未加引号的 on 读成布尔真值 true（on/off/yes/no 的老问题），
+# GitHub 自身按 YAML 1.2 解析不受影响，但加引号后所有解析器与校验工具都能正确识别
+"on":
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 同一分支连续推送时取消旧运行，避免排队
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # 快任务：离线单测。不下载模型、不调用 LLM，纯 CPU 几十秒跑完
+  test:
+    name: 单元测试（离线）
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      # CPU 版 torch 必须先装：requirements.txt 只写 torch>=2.5.0，
+      # 默认会从 PyPI 拉数 GB 的 CUDA 依赖，CI 上既慢又没必要
+      - name: 安装 CPU 版 torch
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: 安装依赖
+        run: pip install -r requirements.txt
+      - name: 运行单元测试
+        env:
+          PYTHONUTF8: "1"
+        run: python -m pytest -q
+
+  # 慢任务：检索与对抗评测。需要真实下载 embedding + reranker 模型，
+  # 缓存命中约 5 分钟；冷缓存需下载 reranker（约 2GB），会明显更久。
+  eval:
+    name: 检索评测（含回归基线）
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: 安装 CPU 版 torch
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: 安装依赖
+        run: pip install -r requirements.txt
+      # 模型权重很大（reranker 约 2GB），不缓存则每次重新下载
+      - name: 缓存 HuggingFace 模型
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ runner.os }}-${{ hashFiles('config.py') }}
+      - name: 建立索引
+        env:
+          PYTHONUTF8: "1"
+        run: python ingest.py
+      # 不调用 LLM：评测只跑粗排 + 精排，全离线可重复
+      - name: 运行检索与对抗评测
+        env:
+          PYTHONUTF8: "1"
+        run: python evaluate.py 2>&1 | tee eval-report.txt
+      # 失败时也要留下报告，否则只能翻日志
+      - name: 上传评测报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: eval-report.txt
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,6 +1,7 @@
 # 企业知识库问答系统（RAG + LangGraph Agent）
 
 [![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![CI](https://github.com/chen-1-xiaobei/RAG-kb/actions/workflows/ci.yml/badge.svg)](https://github.com/chen-1-xiaobei/RAG-kb/actions/workflows/ci.yml)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-1.0-1C3C3C)](https://langchain-ai.github.io/langgraph/)
 [![Tests](https://img.shields.io/badge/tests-74%20passed-brightgreen)](#测试与评测)
@@ -110,6 +111,25 @@ curl.exe -s http://127.0.0.1:8000/agent/ask -H "Content-Type: application/json" 
 
 `POST /ask` 是固定管线（retrieve → rerank → answer），`POST /agent/ask` 是 Agentic RAG：LangGraph 循环 `agent -> tools -> agent ... -> answer`，模型自主决定调用 `search_knowledge_base` 检索或 `list_tables`/`query_table` 查询 CSV 表格。**答案节点的证据门槛**保证零工具证据一律拒答——模型不调工具直接作答、工具零命中、工具报错、轮数耗尽（`MAX_TOOL_ROUNDS`）都会被拦截，模型自编的答案不会被采纳。
 
+### 容器化运行
+
+```powershell
+$env:DEEPSEEK_API_KEY = "sk-..."     # 或写进 .env，compose 会自动读取
+docker compose up --build
+# http://127.0.0.1:8000/docs
+```
+
+镜像基于 `python:3.12-slim`，只装 CPU 版 torch（避免拖入数 GB CUDA 依赖），并以非 root 用户运行。
+两点设计说明：
+
+- **索引在容器启动时自动建立**：`ingest` 是一次性任务，把 `index.json` 与模型缓存写入具名卷
+  `rag-kb-cache`，`api` 服务用 `service_completed_successfully` 依赖它。因此首次 `up` 会自动建索引，
+  之后重启命中已有文件、秒级跳过，不会每次重建。
+- **模型缓存独立于容器生命周期**：embedding + reranker 合计 2GB+，放在具名卷里，重建容器不必重新下载。
+- 健康检查调用 `/health` 并校验 `ok=true`（即索引真的可用），而不是只看进程存活。
+
+`data/` 在 compose 中只读挂载——容器内不该修改知识库，改文档后重新执行 `ingest` 即可。
+
 ## 文档与权限
 
 - 把 `.txt`、`.md`、`.pdf` 或 `.docx` 放入 `data/`，运行 `python ingest.py` 建索引（无需重启服务）。
@@ -148,6 +168,22 @@ python -m pytest -q
 python evaluate.py                  # 评测不达标或相对基线回退时 exit 1
 python evaluate.py --update-baseline  # 人工确认指标后刷新 evals/baseline.json
 ```
+
+### CI 门禁
+
+`.github/workflows/ci.yml` 在每次 push 到 `main` 与每个 PR 上跑两个任务：
+
+| 任务 | 内容 | 特点 |
+| --- | --- | --- |
+| `test` | `python -m pytest -q`（74 个离线单测） | 不下载模型、不调用 LLM，几十秒出结果 |
+| `eval` | `python ingest.py` + `python evaluate.py` | 真实跑粗排 + 精排，**严格校验 `evals/baseline.json`**；不达标或相对基线回退即失败 |
+
+分工的理由：单测是"代码逻辑没坏"的快速反馈，评测是"检索质量没退化"的慢速把关，两者失败时的排查方向完全不同。
+`eval` 需要 reranker 权重（约 2GB），因此缓存 `~/.cache/huggingface`；缓存命中的一次完整运行约 5 分钟。
+两个任务都**不调用 LLM**，所以 CI 里不需要任何真实密钥——这也是把评测设计成纯检索评测的附带收益之一。
+
+> 注意 `eval` 任务不是"跑个脚本看看"：它会把 `evaluate.py` 的退出码作为门禁，因此
+> MMR/nDCG 掉分、权限负例漏放、注入标记出现、表格工具结果不符，都会让 PR 变红。
 
 ### 评测集构成（39 条，`evals/dataset.json`）
 
@@ -195,8 +231,8 @@ python evaluate.py --update-baseline  # 人工确认指标后刷新 evals/baseli
 - **对话是单轮的**：`AskRequest` 不含会话状态，每个请求独立。多轮对话需要引入会话状态模型，并解决三个新问题——会话归属校验（会话 ID 是客户端传入的新权限入口）、每轮重新检索以免权限判定退化为"首次检索时判定一次"、以及避免检索到的注入内容随历史跨轮驻留。
 - **知识库规模上限**：`JSONVectorStore` 每次查询做全量点积，面向万级 chunk 以内；再往上需要 FAISS/pgvector 之类带索引的实现。
 - **纯 CPU 精排约 4.5s/次**：这是 568M cross-encoder 的物理成本。要降只能量化或换更小的 reranker，且**必须重新标定阈值**（换模型后旧阈值不再有效）。
-- **缺少部署与协作配套**：无 Docker、无 CI。测试与评测都是纯 CPU 离线可跑的，接 CI 的成本很低。
-- **评测集偏小**：39 条用例、5 个来源，指标已饱和。详见下方「实测指标」中的说明。
+- **评测集偏小**：39 条用例、5 个来源，指标已饱和。详见上方「实测指标」中的说明。
+- **CI 尚未覆盖 Docker 构建**：`Dockerfile` 与 compose 编排已就绪，但没有纳入流水线（构建镜像要下载 2GB+ 权重，不适合放在每次 PR 上）。若要加，建议只在 `main` 的 tag 上触发。
 
 ## 许可
 
