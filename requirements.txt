@@ -1,0 +1,20 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+pypdf>=5.0.0
+python-dotenv>=1.0.1
+numpy>=2.0.0
+sentence-transformers>=3.0.0
+pymupdf4llm>=1.28.0
+mammoth>=1.8.0
+langchain-core>=1.0.0
+langchain-text-splitters>=1.0.0
+langchain-huggingface>=1.0.0
+langchain-deepseek>=1.1.0
+langgraph>=1.0.0
+PyJWT>=2.9.0
+pytest>=8.3.0
+httpx>=0.28.0
+markdownify>=1.0.0
+# torch 建议先单独安装 CPU 版（避免 PyPI 默认拉取数 GB 的 CUDA 依赖）：
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch>=2.5.0

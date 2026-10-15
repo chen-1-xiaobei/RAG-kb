@@ -1,0 +1,14 @@
+{
+  "note": "检索回归基线；由 evaluate.py --update-baseline 生成，人工确认后提交",
+  "tolerance": 0.02,
+  "metrics": {
+    "source_recall": 1.0,
+    "hit_rate": 1.0,
+    "mrr": 1.0,
+    "ndcg@10": 1.0,
+    "table_tool_accuracy": 1.0,
+    "answerability_accuracy": 1.0,
+    "permission_denial_accuracy": 1.0,
+    "injection_resistance": 1.0
+  }
+}
