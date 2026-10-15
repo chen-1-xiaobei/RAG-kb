@@ -4,7 +4,6 @@
 都会让指标变成看似漂亮的假数字。这里用断言把这类腐烂挡在提交前。
 """
 import json
-import math
 import sys
 from pathlib import Path
 
@@ -13,9 +12,8 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-# 只 import 纯函数模块：本文件是静态数据校验，不应把 embedding/reranker 拖进测试收集阶段
-from eval_metrics import ndcg, reciprocal_rank  # noqa: E402
-
+# 本文件只做静态数据校验：不 import evaluate（会连带拉起检索/模型链路），
+# 指标函数的单测在 tests/test_eval_metrics.py。这样测试套件始终能离线秒跑。
 DATASET = ROOT / "evals" / "dataset.json"
 DATA = ROOT / "data"
 VALID_KINDS = {"retrieval", "table", "permission", "offtopic", "injection"}
@@ -208,33 +206,26 @@ def test_every_indexed_source_is_covered_by_some_case(dataset, cases):
     assert not missing, f"以下来源没有任何用例覆盖: {missing}"
 
 
-# ---------- 指标函数本身 ----------
+def test_evaluate_does_not_depend_on_llm_module():
+    """评测脚本不得 import app —— app 需要 DEEPSEEK_API_KEY，而评测不需要 LLM。
 
-def test_ndcg_rewards_top_rank():
-    """主来源排第一位得满分；主次排反要明确掉分（这正是分级相关性的意义）。"""
-    grades = {"a": 2, "b": 1}
-    assert ndcg(["a", "b"], grades) == pytest.approx(1.0)
-    # ideal DCG = 2/log2(2) + 1/log2(3) = 2.6309；actual = 1/1 + 2/1.585 = 2.2619
-    assert ndcg(["b", "a"], grades) == pytest.approx(2.2619 / 2.6309, abs=1e-4)
-    assert ndcg(["b", "a"], grades) < ndcg(["a", "b"], grades)
-    assert ndcg(["c"], grades) == 0.0
+    这是**静态代理断言**，不是行为验证：真实验证是 CI 的 eval 任务（在没有密钥的
+    环境里跑 evaluate.py）。单测里不能真去 import evaluate，那会把 embedding 模型
+    拖进快任务——所以这里只守住"依赖方向"这个最容易退化的点。
+    背景：这条依赖曾让 CI 的评测任务因缺少 key 直接失败，而调用链上没有任何一处
+    真正需要 LLM。
+    """
+    import ast
 
-
-def test_ndcg_handles_single_relevant_source():
-    """单来源用例：排第 1 得 1.0，排第 2 明显掉分，排在 k 之外得 0。"""
-    assert ndcg(["x"], {"x": 2}) == pytest.approx(1.0)
-    assert ndcg(["y", "x"], {"x": 2}) == pytest.approx(1 / math.log2(3), abs=1e-6)
-    assert ndcg([f"filler{i}" for i in range(10)], {"x": 2}) == 0.0
-
-
-def test_ndcg_is_bounded_and_monotonic():
-    grades = {"a": 2}
-    scores = [ndcg(["a"] + ["f"] * rank, grades) for rank in range(4)]
-    assert scores == sorted(scores, reverse=True)
-    assert all(0.0 <= score <= 1.0 for score in scores)
-
-
-def test_reciprocal_rank():
-    assert reciprocal_rank(["a", "b"], {"a"}) == 1.0
-    assert reciprocal_rank(["x", "b"], {"b"}) == 0.5
-    assert reciprocal_rank(["x", "y"], {"b"}) == 0.0
+    tree = ast.parse((ROOT / "evaluate.py").read_text(encoding="utf-8"))
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".")[0])
+        elif isinstance(node, ast.Import):
+            imported.update(alias.name.split(".")[0] for alias in node.names)
+    assert "app" not in imported, (
+        "evaluate.py 又 import app 了：app 构造 LLM 客户端需要密钥，"
+        "评测应当只依赖 retrieval"
+    )
+    assert "retrieval" in imported, "评测应通过 retrieval 使用真实检索管线"

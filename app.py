@@ -1,7 +1,6 @@
 import logging
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
-from threading import RLock
 from time import perf_counter
 
 from dotenv import load_dotenv
@@ -15,14 +14,13 @@ from fastapi.responses import RedirectResponse
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_deepseek import ChatDeepSeek
-from langchain_huggingface import HuggingFaceEmbeddings
 from pydantic import BaseModel, Field
 
 from agent_flow import AgentState, build_agent_graph, build_evidence
 from auth import Principal, get_principal
 from config import settings
-from kb_store import JSONVectorStore
-from rerank import rerank, warmup as rerank_warmup
+from rerank import warmup as rerank_warmup
+from retrieval import IndexConfigError, embeddings, index_manager, retrieve_ranked
 from tools import DATA, TableRegistry, build_tools, execute_tools
 
 logging.basicConfig(
@@ -31,7 +29,6 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger("rag-kb")
-QUERY_INSTRUCTION = "为这个句子生成表示以用于检索相关文章："
 LOG_QUESTION_CHARS = 80  # 日志只记问题前缀：原文可能含敏感信息，够定位即可
 
 
@@ -40,12 +37,22 @@ def question_for_log(question: str) -> str:
     flat = " ".join(question.split())
     return flat if len(flat) <= LOG_QUESTION_CHARS else flat[:LOG_QUESTION_CHARS] + "…"
 
-embeddings = HuggingFaceEmbeddings(
-    model_name=settings.embedding_model,
-    encode_kwargs={"normalize_embeddings": True},
-    query_encode_kwargs={"prompt": QUERY_INSTRUCTION},
-)
-llm = ChatDeepSeek(model=settings.chat_model, temperature=0)
+
+_llm: ChatDeepSeek | None = None
+_answer_chain = None
+
+
+def get_llm() -> ChatDeepSeek:
+    """惰性构造 LLM 客户端。
+
+    不在 import 期构造的原因：构造会立即校验 DEEPSEEK_API_KEY，而检索、评测与
+    单元测试这些路径根本不需要 LLM。放在 import 期会把"必须有真实密钥"变成整个
+    模块的前置条件，评测也就无法作为不依赖密钥的 CI 门禁。
+    """
+    global _llm
+    if _llm is None:
+        _llm = ChatDeepSeek(model=settings.chat_model, temperature=0)
+    return _llm
 
 
 class AnswerDraft(BaseModel):
@@ -64,7 +71,14 @@ SYSTEM_PROMPT = """你是企业知识库助手。必须遵守以下规则：
 prompt = ChatPromptTemplate.from_messages(
     [("system", SYSTEM_PROMPT), ("human", "<knowledge_base>\n{context}\n</knowledge_base>\n\n<question>{question}</question>")]
 )
-answer_chain = prompt | llm.with_structured_output(AnswerDraft)
+
+
+def get_answer_chain():
+    """答案链同样惰性构造：with_structured_output 需要 LLM 客户端。"""
+    global _answer_chain
+    if _answer_chain is None:
+        _answer_chain = prompt | get_llm().with_structured_output(AnswerDraft)
+    return _answer_chain
 
 # agent 节点（信息获取决策）与答案节点（生成约束）提示词分离：
 # 前者决定"调什么工具收集资料"，后者约束"只能依据已收集的证据作答"
@@ -79,36 +93,6 @@ AGENT_SYSTEM_PROMPT = """你是企业知识库助手。先决定是否需要工�
 """
 
 
-class IndexConfigError(RuntimeError):
-    """索引文件与当前配置/代码不兼容（schema 版本、向量维度或 embedding 模型不一致）。"""
-
-
-class IndexManager:
-    def __init__(self, path: Path):
-        self.path = path
-        self._store: JSONVectorStore | None = None
-        self._mtime_ns: int | None = None
-        self._lock = RLock()
-
-    def get(self) -> JSONVectorStore:
-        if not self.path.exists():
-            raise FileNotFoundError(self.path)
-        mtime_ns = self.path.stat().st_mtime_ns
-        with self._lock:
-            if self._store is None or self._mtime_ns != mtime_ns:
-                try:
-                    store = JSONVectorStore.load(self.path, embeddings)
-                except ValueError as exc:  # schema 版本/向量维度等索引自身问题
-                    raise IndexConfigError(str(exc)) from exc
-                indexed_model = store.index_metadata.get("embedding_model")
-                if indexed_model and indexed_model != settings.embedding_model:
-                    raise IndexConfigError(f"Index uses {indexed_model}, configured model is {settings.embedding_model}")
-                self._store, self._mtime_ns = store, mtime_ns
-                logger.info("Loaded index with %s records", len(store._records))
-            return self._store
-
-
-index_manager = IndexManager(INDEX)
 table_registry = TableRegistry(DATA)
 
 
@@ -144,43 +128,12 @@ def format_docs(docs) -> str:
     )
 
 
-MAX_CANDIDATES = 16  # 精排候选封顶，控制 CPU 耗时
-
-
-def retrieve(question: str, top_k: int, principal: Principal):
-    return index_manager.get().similarity_search_with_relevance_scores(
-        question,
-        k=top_k,
-        score_threshold=settings.score_threshold,
-        filter=lambda record: record.get("group") in principal.allowed_groups,
-    )
-
-
-def candidate_k(top_k: int) -> int:
-    """粗排召回候选数：精排需要比最终 top_k 更多的候选。"""
-    return min(top_k * settings.rerank_candidate_factor, MAX_CANDIDATES)
-
-
-def retrieve_ranked(question: str, top_k: int, principal: Principal):
-    """两段式检索：向量粗排召回候选 -> cross-encoder 精排过滤。"""
-    started = perf_counter()
-    candidates = retrieve(question, candidate_k(top_k), principal)
-    coarse_ms = (perf_counter() - started) * 1000
-    rerank_started = perf_counter()
-    hits = rerank(question, candidates, top_n=top_k, threshold=settings.rerank_threshold)
-    logger.info(
-        "retrieve top_k=%d candidates=%d hits=%d coarse_ms=%d rerank_ms=%d",
-        top_k, len(candidates), len(hits), coarse_ms, (perf_counter() - rerank_started) * 1000,
-    )
-    return hits
-
-
 def generate_answer(question: str, hits) -> AskResponse:
     if not hits:
         return AskResponse(answer="无法从现有知识库确认该问题。", sources=[], insufficient_context=True)
     docs = [doc for doc, _ in hits]
     started = perf_counter()
-    draft = answer_chain.invoke({"context": format_docs(docs), "question": question})
+    draft = get_answer_chain().invoke({"context": format_docs(docs), "question": question})
     logger.info(
         "answer_generate hits=%d citations=%s insufficient=%s ms=%d",
         len(hits), draft.citations, draft.insufficient_context, (perf_counter() - started) * 1000,
@@ -207,7 +160,7 @@ def _agent_agent(state: AgentState) -> dict:
 
     工具实例从 state 取（已绑定 Principal），模型只能提供查询参数。
     """
-    llm_with_tools = llm.bind_tools(list(state["tools"].values()))
+    llm_with_tools = get_llm().bind_tools(list(state["tools"].values()))
     started = perf_counter()
     response = llm_with_tools.invoke([SystemMessage(AGENT_SYSTEM_PROMPT), *state["messages"]])
     elapsed_ms = (perf_counter() - started) * 1000

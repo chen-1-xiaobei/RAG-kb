@@ -24,8 +24,11 @@ ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
 
 from auth import Principal  # noqa: E402
-from app import retrieve_ranked  # noqa: E402
 from eval_metrics import NDCG_K, grades_for, mean, ndcg, reciprocal_rank  # noqa: E402
+# 只依赖 retrieval 而非 app：app 会构造 LLM 客户端，而评测不需要 LLM。
+# 这一点由 CI 抓出来过——evaluate.py import app 导致评测在 CI 上因缺少
+# DEEPSEEK_API_KEY 直接失败，而"纯检索评测"本不该有任何密钥前置条件。
+from retrieval import retrieve_ranked  # noqa: E402
 from tools import TableRegistry, query_table_impl  # noqa: E402
 
 DATASET = ROOT / "evals" / "dataset.json"

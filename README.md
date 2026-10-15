@@ -148,6 +148,7 @@ docker compose up --build
 - **文档标准化中间层**：所有格式先归一化为 markdown 再进切分管道，下游只懂一种格式；loader 按格式可插拔、按内容哈希 + 转换版本缓存（源文件变更或 loader 升级自动失效）、转换失败降级纯文本提取。
 - LangGraph Agentic RAG：`agent（bind_tools 决策）-> tools -> agent ... -> answer` 循环，条件边 + 轮数上限强制收敛；节点/路由全部注入式，单测注入 stub 不碰模型。配套两个结构性保证：**证据门槛**（零工具证据直接拒答且不调用 LLM，闭卷不依赖提示词自觉）与**工具身份闭包注入**（工具由工厂按请求构造并绑定 Principal，模型只能提供 query/top_k/表名/SQL 等查询参数，权限不在模型可写的通道上；top_k 服务端夹取）。
 - **模型可见材料与答案证据解耦**：工具返回 `(text, artifact)`——给模型的是截断后的材料文本、不带 citation 编号；给答案节点的是完整证据。citation 编号只在答案节点组装时统一赋值，检索命中与表格行混合编号不冲突；表格行转伪 Document，Source 模型/citation 校验/拒答逻辑零改动复用。
+- **检索与 LLM 的模块解耦**：两段式检索独立在 `retrieval.py`，LLM 客户端改为惰性构造（`get_llm()`）。原因是 `app.py` 在 import 期构造 `ChatDeepSeek` 会立即校验 `DEEPSEEK_API_KEY`，而**检索、评测与单元测试都不需要 LLM**——放在 import 期会把"必须有真实密钥"变成整个模块的前置条件。这个耦合是 CI 抓出来的：评测任务在没有密钥的 runner 上直接失败。解耦后 CI 里不需要任何密钥，评测也才可能作为硬门禁。
 - 表格工具安全三层：表名白名单 + SELECT-only 语法校验（单语句、禁注释与写关键字、FROM 必须等于白名单表）+ sqlite `set_authorizer` 数据库层授权（只放行对白名单表的 READ，语法被绕过也读不到其他表）；行数上限截断；工具异常/未知工具降级为 error ToolMessage 回给模型，循环不中断。
 - 提示词分离：agent 节点管"调什么工具收集资料"（规划），答案节点管"只能依据已收集证据作答"（生成），两条提示词各司其职。
 - **链路可观测**：两个端点各自输出结构化链路日志（`rag_query_start/done`、`agent_query_start/done`、`agent_decision`、`tool_call/tool_result`、`answer_gate`、`retrieve`、`answer_generate`），带毫秒时间戳与每步耗时（粗排/精排/LLM 决策/工具执行/生成分别计时），单看日志即可复盘一次请求的决策路径与耗时分布；问题文本只记前缀（`LOG_QUESTION_CHARS`，折叠空白防多行污染），不把用户原文写入日志。

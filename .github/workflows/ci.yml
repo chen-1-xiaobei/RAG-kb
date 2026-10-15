@@ -68,7 +68,9 @@ jobs:
         env:
           PYTHONUTF8: "1"
         run: python ingest.py
-      # 不调用 LLM：评测只跑粗排 + 精排，全离线可重复
+      # 不需要 DEEPSEEK_API_KEY：评测只跑粗排 + 精排，完全不碰 LLM。
+      # 这一点由本 CI 抓出来过——evaluate.py 曾 import app（构造 LLM 客户端需密钥），
+      # 现已解耦为只依赖 retrieval.py。
       - name: 运行检索与对抗评测
         env:
           PYTHONUTF8: "1"
