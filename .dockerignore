@@ -9,5 +9,6 @@ __pycache__/
 *.py[cod]
 index.json
 index.json.tmp
+conversations.db
 .env
 eval-report.txt

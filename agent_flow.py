@@ -18,6 +18,10 @@ class AgentState(TypedDict, total=False):
     top_k: int
     user_id: str
     groups: list[str]
+    # 会话标识（无会话时为空串）。只用于回传响应与落库，不参与权限判定。
+    conversation_id: str
+    # 仅供查询改写的对话上下文（最近 N 轮问答，有界、无原文、已标注不可信）。
+    history: str
     # 对话消息：AIMessage.tool_calls 与 ToolMessage.tool_call_id 一一对应，
     # 模型据此把工具结果与调用对上号
     messages: Annotated[list[AnyMessage], add_messages]
@@ -30,6 +34,9 @@ class AgentState(TypedDict, total=False):
     # 单请求内的检索去重表：归一化调用键 -> (材料文本, 证据)。
     # 只在一次请求的 state 里存活，不跨用户共享，因此不引入权限泄露面。
     search_memo: dict[str, Any]
+    # 本轮是否调用过反问工具。答案节点据此区分"该问"与"该拒"：
+    # 无证据 + 调过反问 -> 反问；无证据 + 没调 -> 拒答（硬门槛）。
+    clarification_requested: bool
     tool_rounds: int       # 工具节点执行轮数，路由上限用
     response: Any
 

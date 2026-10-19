@@ -25,6 +25,7 @@ from langchain_core.messages import ToolMessage
 from langchain_core.tools import tool
 
 from auth import Principal
+from clarification import CLARIFY_TOOL_NAME, clarify_payload
 from config import settings
 from ingest import group_for  # 复用权限约定：data/ 根目录=public，data/<文件夹>/=组名
 
@@ -341,6 +342,18 @@ def make_list_tool(principal: Principal, registry: TableRegistry):
     return list_tables
 
 
+def make_clarify_tool():
+    @tool
+    def ask_clarification(question: str) -> str:
+        """当用户问题缺少必要指代、无法确定检索目标时，向用户追问一句。
+
+        只在无法构造出有效检索查询时使用；只要能检索就不要用它。
+        """
+        return clarify_payload(question)
+
+    return ask_clarification
+
+
 def build_tools(
     principal: Principal,
     search_fn: Callable,
@@ -358,6 +371,7 @@ def build_tools(
         ),
         QUERY_TOOL_NAME: make_query_tool(principal, registry, max_rows),
         LIST_TOOL_NAME: make_list_tool(principal, registry),
+        CLARIFY_TOOL_NAME: make_clarify_tool(),
     }
 
 
@@ -419,6 +433,7 @@ def execute_tools(state: dict) -> dict:
     # 那就是白付一次精排（本机约 5s）。memo 只在单次请求的 state 里，
     # 不跨用户共享，因此不引入权限泄露面。
     memo: dict[str, tuple] = dict(state.get("search_memo") or {})
+    clarified = False
     for call in calls:
         logger.info(
             "tool_call round=%d name=%s args=%s",
@@ -443,7 +458,13 @@ def execute_tools(state: dict) -> dict:
             continue
         started = perf_counter()
         try:
-            text, artifact = tool_fn.invoke(call["args"])
+            result = tool_fn.invoke(call["args"])
+            if call["name"] == CLARIFY_TOOL_NAME:
+                # 反问工具只返回一段文本，不产生证据
+                text, artifact = result, []
+                clarified = True
+            else:
+                text, artifact = result
         except Exception as exc:  # 参数校验失败等：错误文本给模型看，不阻断循环
             logger.warning(
                 "tool_failed name=%s ms=%d error=%s",
@@ -471,5 +492,6 @@ def execute_tools(state: dict) -> dict:
         "hits": hits,
         "table_rows": rows,
         "search_memo": memo,
+        "clarification_requested": clarified or state.get("clarification_requested", False),
         "tool_rounds": state.get("tool_rounds", 0) + 1,
     }

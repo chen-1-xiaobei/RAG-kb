@@ -1,7 +1,11 @@
 """工具层单测（stub 检索函数 + 临时 CSV，不加载模型、不调用 LLM）。"""
+import json
+from pathlib import Path
+
 from langchain_core.messages import AIMessage
 
 from auth import Principal
+from clarification import CLARIFICATION_KEY, CLARIFY_TOOL_NAME
 from tools import (
     LIST_TOOL_NAME,
     QUERY_TOOL_NAME,
@@ -364,7 +368,9 @@ def test_build_tools_binds_principal(tmp_path):
         _principal("财务"), fake_search, registry,
         max_top_k=8, max_rows=50, truncate=500,
     )
-    assert set(tools) == {SEARCH_TOOL_NAME, QUERY_TOOL_NAME, LIST_TOOL_NAME}
+    assert set(tools) == {
+        SEARCH_TOOL_NAME, QUERY_TOOL_NAME, LIST_TOOL_NAME, CLARIFY_TOOL_NAME
+    }
     text, artifact = tools[SEARCH_TOOL_NAME].invoke({"question": "住宿", "top_k": 2})
     assert text == "未检索到相关文档。"
     assert seen["principal"].allowed_groups == frozenset({"财务", "public"})  # 闭包持有 Principal
@@ -372,3 +378,10 @@ def test_build_tools_binds_principal(tmp_path):
         {"table": "财务/报销标准", "sql": 'SELECT * FROM "财务/报销标准"'}
     )
     assert len(docs) == 2
+
+
+def test_clarify_tool_returns_payload_without_evidence():
+    """反问工具不产生证据，只返回可解析的追问载荷。"""
+    tools = build_tools(_principal(), lambda q, k, p: [], TableRegistry(Path("data")))
+    payload = tools[CLARIFY_TOOL_NAME].invoke({"question": "你指的是哪个标准？"})
+    assert json.loads(payload)[CLARIFICATION_KEY] == "你指的是哪个标准？"

@@ -8,5 +8,8 @@ pytest-of-*/
 htmlcov/
 index.json
 index.json.tmp
+conversations.db
+*.db-wal
+*.db-shm
 .cache/
 
