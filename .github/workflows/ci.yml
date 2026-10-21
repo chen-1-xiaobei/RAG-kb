@@ -68,6 +68,14 @@ jobs:
         env:
           PYTHONUTF8: "1"
         run: python ingest.py
+      # 导入冒烟：没有任何单测 import app.py（它会在 import 期构造 embedding 与
+      # FastAPI 应用），所以其中的运行时错误不会被测试发现。这里放一个最小导入检查，
+      # 放在本 job 是因为它需要已下载的模型。踩过的坑：@app.delete 曾写在
+      # app = FastAPI() 之前，语法检查通过但导入时 NameError。
+      - name: 导入冒烟测试（不需要密钥）
+        env:
+          PYTHONUTF8: "1"
+        run: python -c "import app; print('app ok:', len(app.app.routes), 'routes')"
       # 不需要 DEEPSEEK_API_KEY：评测只跑粗排 + 精排，完全不碰 LLM。
       # 这一点由本 CI 抓出来过——evaluate.py 曾 import app（构造 LLM 客户端需密钥），
       # 现已解耦为只依赖 retrieval.py。

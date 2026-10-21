@@ -4,16 +4,17 @@
 [![CI](https://github.com/chen-1-xiaobei/RAG-kb/actions/workflows/ci.yml/badge.svg)](https://github.com/chen-1-xiaobei/RAG-kb/actions/workflows/ci.yml)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-1.0-1C3C3C)](https://langchain-ai.github.io/langgraph/)
-[![Tests](https://img.shields.io/badge/tests-74%20passed-brightgreen)](#测试与评测)
+[![Tests](https://img.shields.io/badge/tests-133%20passed-brightgreen)](#测试与评测)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 > 面向企业内部制度与流程问答的 Agentic RAG 系统。RAG 只是它可调用的工具之一：模型自主决定
-> **检索文档** 还是 **查询结构化表格**，而答案在任何情况下都只能来自真实工具证据。
+> **检索文档**、**查询结构化表格**，还是在确认后**发起报销申请**；而答案在任何情况下都只能来自真实工具证据。
 
-**三个设计取向**
+**四个设计取向**
 
 - **拒答是控制流，不是提示词。** 零工具证据一律拒答且不调用 LLM，模型自编的答案结构上无处安放。
 - **权限不在模型可写的通道上。** 工具按请求构造并绑定身份闭包，模型只能提供查询参数；检索层按组预过滤。
+- **写操作与读操作分级。** 模型只能"提案"，提交需要显式确认；幂等键挡住重试，确认卡由服务端渲染。
 - **性能靠测量，不靠直觉。** 精排 2.2x 与缓存 8517ms→0.3ms 都来自实测，且包含一个反直觉结论（见下）。
 
 ## 架构
@@ -114,7 +115,6 @@ curl.exe -s http://127.0.0.1:8000/agent/ask -H "Content-Type: application/json" 
 ### 多轮对话
 
 两个端点都支持多轮：响应里总会返回 `conversation_id`，下一轮把它带回来即可续话。
-
 ```json
 // 第 1 轮
 {"question":"报销要几天内提交？"}
@@ -139,6 +139,40 @@ curl.exe -s http://127.0.0.1:8000/agent/ask -H "Content-Type: application/json" 
 | 无 | 其他 | 拒答（原行为不变） |
 
 若允许模型"自由反问"，它就成了一条绕过证据门槛的出口——永远不检索、用反问搪塞。所以反问必须有结构性依据。
+
+### 写操作：报销提案与提交
+
+前面所有工具都是**只读**的，最坏情况是"读到不该读的"。`propose_expense_claim` / `commit_expense_claim` 是第一个**有副作用**的工具，风险模型完全不同：
+
+| | 只读工具 | 写工具 |
+| --- | --- | --- |
+| 最坏情况 | 读到不该读的 | **提交了不该提交的** |
+| 可重试性 | 随便重试 | **重试会产生重复副作用** |
+| 授权时机 | 构造闭包时一次判定 | **每次执行前重新判定** |
+| 人审 | 不需要 | **需要确认门** |
+
+因此它被拆成两阶段，且模型**只能提案、不能直接提交**：
+
+```
+用户: "帮我提交上周去上海的住宿报销，两晚"
+  ↓ 模型 propose_expense_claim(住宿, 1000, nights=2, city_tier=一线, invoice_ids=[...])
+服务端: 查标准 → 校验 → 落库 → 返回提案号
+  ↓ 答案节点渲染确认卡（pending_confirmation=true）
+用户: "确认提交"
+  ↓ 模型 commit_expense_claim(proposal_id)
+服务端: 原子状态迁移 → 写审计 → submitted
+```
+
+四个关键设计：
+
+- **确认卡由服务端渲染，不经过 LLM。** 金额、标准、提案号都从提案数据生成——模型无法在确认文案里改动任何一个数字。
+- **提交是幂等的。** 同一个 `proposal_id` 重复提交返回 `already_submitted`，审计里保留两条尝试记录但**只有一条生效**。模型"超时重试"在只读工具下无害，在写操作下会变成重复报销。
+- **结构化结果码，不是异常字符串。** `submitted` / `already_submitted` / `rejected_by_policy` / `not_found`。因为"提交超时"和"提交失败"在字符串层面无法区分，模型据此决定是否重试并不可靠。
+- **提案归属同时绑定用户与会话。** 换用户或换会话拿着同一个提案号，一律 `not_found`（与"表不存在与无权同文案"一致，不泄露存在性）。状态迁移用单条带条件的 `UPDATE`，并发提交只有一个能成功。
+
+策略校验是确定性的（`claims.evaluate_policy`）：住宿按城市档位乘晚数限价、凭票类必须有发票、金额超 5000 标记**需双签**（不是拒绝——那是"要求更严的审批"，不是"不许报销"）。`tests/test_claims.py` 里有一条断言金额口径与 `data/财务/报销标准.csv` 一致，改了标准表却忘了改策略会直接红。
+
+> **后端是模拟的。** 没有接真实 OA 系统——这里实现和验证的是**动作协议本身**（提案、确认、幂等、审计、策略校验），后端落在一张本地 SQLite 表里。
 
 ### 容器化运行
 
@@ -174,6 +208,7 @@ docker compose up --build
 - **精排逐对缓存（针对 agent 重试路径）**：agent 循环里"换个关键词再试"是提示词明确鼓励的行为，但每一轮都重排一批高度重叠的候选块——同一 `(question, doc)` 对会被反复送进模型。改为按 `(模型, question, doc_id, 文档内容哈希)` 缓存原始 logit，LRU 上限 2 万条（约 10MB）：**冷 8517ms → 热 0.3ms**（本机 8 对，`rerank_cache pairs=8 hits=8 misses=0`）；离线评测中命中率约 3/8（`hits=5 misses=3`），真实多轮重试场景更高。内容哈希参与键，索引重建后自动失效；只缓存 logit 这一纯计算结果、不缓存 top-N/阈值等策略，因此调阈值无需清缓存。
 - **检索成本不交给模型决定**：精排耗时与候选数线性相关（候选 = `top_k × RERANK_CANDIDATE_FACTOR`），而 `top_k` 原本是模型可自由填写的工具参数——填 8 就是默认值 4 的两倍开销。现改为服务端封顶（`TOOL_DEFAULT_TOP_K`，默认 4）：模型**只能调小、不能调大**，工具描述也明说"调大不会有更多结果，调小可加快响应"。同时对参数格式容错（模型给出非整数时回落默认值，不因参数格式打断循环）。
 - **单请求内检索去重**：同一 query 重复调用（模型可能原地重试）直接复用结果，键基于**夹取后**的参数（`top_k=8` 与 `top_k=20` 夹成同一查询应视为同一键）。memo 只存在单次请求的 state 里、不跨用户共享，因此不引入权限泄露面；表格工具刻意不参与去重，避免误用陈旧行数据。
+- **读工具与写工具的风险分级**：只读工具服从"模型可以比较自由地调"，写工具不行——它的失败不可回滚。因此写操作被拆成提案/提交两段，模型只能提案；提交靠**幂等键**挡住重试、靠**结构化结果码**取代异常字符串（因为"超时"与"失败"在字符串层面无法区分）、靠**单条带条件 UPDATE** 保证并发下只有一次生效、靠**审计表**留下每次尝试（含被策略拒绝的）。确认卡由服务端渲染而不经过 LLM，模型无法篡改金额。
 - **文档标准化中间层**：所有格式先归一化为 markdown 再进切分管道，下游只懂一种格式；loader 按格式可插拔、按内容哈希 + 转换版本缓存（源文件变更或 loader 升级自动失效）、转换失败降级纯文本提取。
 - LangGraph Agentic RAG：`agent（bind_tools 决策）-> tools -> agent ... -> answer` 循环，条件边 + 轮数上限强制收敛；节点/路由全部注入式，单测注入 stub 不碰模型。配套两个结构性保证：**证据门槛**（零工具证据直接拒答且不调用 LLM，闭卷不依赖提示词自觉）与**工具身份闭包注入**（工具由工厂按请求构造并绑定 Principal，模型只能提供 query/top_k/表名/SQL 等查询参数，权限不在模型可写的通道上；top_k 服务端夹取）。
 - **模型可见材料与答案证据解耦**：工具返回 `(text, artifact)`——给模型的是截断后的材料文本、不带 citation 编号；给答案节点的是完整证据。citation 编号只在答案节点组装时统一赋值，检索命中与表格行混合编号不冲突；表格行转伪 Document，Source 模型/citation 校验/拒答逻辑零改动复用。
@@ -206,7 +241,7 @@ python evaluate.py --update-baseline  # 人工确认指标后刷新 evals/baseli
 
 | 任务 | 内容 | 特点 |
 | --- | --- | --- |
-| `test` | `python -m pytest -q`（74 个离线单测） | 不下载模型、不调用 LLM，几十秒出结果 |
+| `test` | `python -m pytest -q`（133 个离线单测） | 不下载模型、不调用 LLM，几十秒出结果 |
 | `eval` | `python ingest.py` + `python evaluate.py` | 真实跑粗排 + 精排，**严格校验 `evals/baseline.json`**；不达标或相对基线回退即失败 |
 
 分工的理由：单测是"代码逻辑没坏"的快速反馈，评测是"检索质量没退化"的慢速把关，两者失败时的排查方向完全不同。

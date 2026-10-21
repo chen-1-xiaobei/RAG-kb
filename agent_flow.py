@@ -37,6 +37,9 @@ class AgentState(TypedDict, total=False):
     # 本轮是否调用过反问工具。答案节点据此区分"该问"与"该拒"：
     # 无证据 + 调过反问 -> 反问；无证据 + 没调 -> 拒答（硬门槛）。
     clarification_requested: bool
+    # 本轮的写操作事件（提案 / 提交）。答案节点据此渲染确认卡，且**不调用 LLM**：
+    # 金额与提案号由服务端渲染，模型无法在确认文案里改数字。
+    claim_events: list[Any]
     tool_rounds: int       # 工具节点执行轮数，路由上限用
     response: Any
 

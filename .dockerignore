@@ -10,5 +10,6 @@ __pycache__/
 index.json
 index.json.tmp
 conversations.db
+claims.db
 .env
 eval-report.txt

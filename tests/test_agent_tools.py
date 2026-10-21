@@ -5,9 +5,12 @@ from pathlib import Path
 from langchain_core.messages import AIMessage
 
 from auth import Principal
+from claims import ClaimStore
 from clarification import CLARIFICATION_KEY, CLARIFY_TOOL_NAME
 from tools import (
+    COMMIT_CLAIM_TOOL_NAME,
     LIST_TOOL_NAME,
+    PROPOSE_CLAIM_TOOL_NAME,
     QUERY_TOOL_NAME,
     SEARCH_TOOL_NAME,
     TableRegistry,
@@ -337,7 +340,9 @@ def test_execute_tools_memo_persists_across_rounds():
 def test_execute_tools_does_not_memo_table_tools(tmp_path):
     """表格工具不参与检索去重：每次查询都重新执行（避免误用陈旧行）。"""
     registry = _registry(tmp_path, {"公开表.csv": "a\n1\n"})
-    tool = build_tools(_principal(), lambda q, k, p: [], registry)[QUERY_TOOL_NAME]
+    tool = build_tools(
+        _principal(), lambda q, k, p: [], registry, ClaimStore(tmp_path / "claims.db")
+    )[QUERY_TOOL_NAME]
     calls = [
         {"name": QUERY_TOOL_NAME, "args": {"table": "公开表", "sql": 'SELECT * FROM "公开表"'}, "id": "c1"},
         {"name": QUERY_TOOL_NAME, "args": {"table": "公开表", "sql": 'SELECT * FROM "公开表"'}, "id": "c2"},
@@ -365,11 +370,13 @@ def test_build_tools_binds_principal(tmp_path):
 
     registry = _registry(tmp_path, {"财务/报销标准.csv": FINANCE_CSV})
     tools = build_tools(
-        _principal("财务"), fake_search, registry,
+        _principal("财务"), fake_search, registry, ClaimStore(tmp_path / "claims.db"),
+        conversation_id="conv-1",
         max_top_k=8, max_rows=50, truncate=500,
     )
     assert set(tools) == {
-        SEARCH_TOOL_NAME, QUERY_TOOL_NAME, LIST_TOOL_NAME, CLARIFY_TOOL_NAME
+        SEARCH_TOOL_NAME, QUERY_TOOL_NAME, LIST_TOOL_NAME, CLARIFY_TOOL_NAME,
+        PROPOSE_CLAIM_TOOL_NAME, COMMIT_CLAIM_TOOL_NAME,
     }
     text, artifact = tools[SEARCH_TOOL_NAME].invoke({"question": "住宿", "top_k": 2})
     assert text == "未检索到相关文档。"
@@ -380,8 +387,26 @@ def test_build_tools_binds_principal(tmp_path):
     assert len(docs) == 2
 
 
-def test_clarify_tool_returns_payload_without_evidence():
+def test_write_tool_binds_conversation_and_principal(tmp_path):
+    """写工具闭包绑定会话：没有会话就无法提案。"""
+    registry = _registry(tmp_path, {"财务/报销标准.csv": FINANCE_CSV})
+    store = ClaimStore(tmp_path / "claims.db")
+    tools = build_tools(
+        _principal("财务"), lambda q, k, p: [], registry, store, conversation_id="",
+    )
+    text, events = tools[PROPOSE_CLAIM_TOOL_NAME].invoke(
+        {"category": "住宿", "amount": 1000.0, "nights": 2, "city_tier": "一线",
+         "invoice_ids": ["inv-1"]}
+    )
+    assert events[0].result == "not_found"
+    assert "会话" in text
+
+
+def test_clarify_tool_returns_payload_without_evidence(tmp_path):
     """反问工具不产生证据，只返回可解析的追问载荷。"""
-    tools = build_tools(_principal(), lambda q, k, p: [], TableRegistry(Path("data")))
+    tools = build_tools(
+        _principal(), lambda q, k, p: [], TableRegistry(Path("data")),
+        ClaimStore(tmp_path / "claims.db"),
+    )
     payload = tools[CLARIFY_TOOL_NAME].invoke({"question": "你指的是哪个标准？"})
     assert json.loads(payload)[CLARIFICATION_KEY] == "你指的是哪个标准？"

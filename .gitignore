@@ -9,6 +9,7 @@ htmlcov/
 index.json
 index.json.tmp
 conversations.db
+claims.db
 *.db-wal
 *.db-shm
 .cache/

@@ -25,6 +25,18 @@ from langchain_core.messages import ToolMessage
 from langchain_core.tools import tool
 
 from auth import Principal
+from claims import (
+    ALREADY_SUBMITTED,
+    NOT_FOUND,
+    PROPOSED,
+    REJECTED_BY_POLICY,
+    SUBMITTED,
+    Claim,
+    ClaimEvent,
+    ClaimStore,
+    evaluate_policy,
+    summarize,
+)
 from clarification import CLARIFY_TOOL_NAME, clarify_payload
 from config import settings
 from ingest import group_for  # 复用权限约定：data/ 根目录=public，data/<文件夹>/=组名
@@ -37,6 +49,8 @@ DATA = ROOT / "data"
 SEARCH_TOOL_NAME = "search_knowledge_base"
 QUERY_TOOL_NAME = "query_table"
 LIST_TOOL_NAME = "list_tables"
+PROPOSE_CLAIM_TOOL_NAME = "propose_expense_claim"
+COMMIT_CLAIM_TOOL_NAME = "commit_expense_claim"
 
 _FROM_RE = re.compile(r"\bFROM\s+([`\"\w./\u4e00-\u9fff]+)", re.IGNORECASE)
 
@@ -354,17 +368,129 @@ def make_clarify_tool():
     return ask_clarification
 
 
+# ---------------------------------------------------------------------------
+# 写操作工具：报销提案与提交
+#
+# 与只读工具的三点不同：
+# 1. 模型只能「提案」，金额由服务端校验并持久化，提交需要另一个显式调用；
+# 2. 返回结构化结果码而非异常，因为"超时"与"失败"在字符串层面无法区分，
+#    模型据此决定重试并不可靠；
+# 3. 提交是幂等的——同一提案重复提交返回 already_submitted，不产生第二条记录。
+# ---------------------------------------------------------------------------
+
+def propose_claim_impl(
+    claim: Claim,
+    principal: Principal,
+    conversation_id: str,
+    store: ClaimStore,
+) -> tuple[str, list[ClaimEvent]]:
+    """提案核心：校验策略 → 通过则持久化 → 返回给模型的结果文本与事件。"""
+    if not conversation_id:
+        # 没有会话就没有"确认"这个上下文，写操作无从谈起
+        event = ClaimEvent("propose", NOT_FOUND, "", claim)
+        return "当前没有会话上下文，无法发起报销提案。", [event]
+
+    violations, needs_dual_sign = evaluate_policy(claim)
+    if violations:
+        store.record(principal.user_id, conversation_id, "", "propose", REJECTED_BY_POLICY,
+                     "；".join(violations))
+        event = ClaimEvent("propose", REJECTED_BY_POLICY, "", claim, tuple(violations))
+        return f"提案被驳回：{'；'.join(violations)}", [event]
+
+    proposal = store.create_proposal(principal.user_id, conversation_id, claim, needs_dual_sign)
+    store.record(principal.user_id, conversation_id, proposal.proposal_id, "propose", PROPOSED)
+    summary = summarize(claim, proposal.proposal_id)
+    event = ClaimEvent("propose", PROPOSED, proposal.proposal_id, claim,
+                       (), needs_dual_sign, summary)
+    tail = "（注意：超过 5000 元需双签）" if needs_dual_sign else ""
+    return f"{summary}{tail}。请让用户确认后再调用 {COMMIT_CLAIM_TOOL_NAME}。", [event]
+
+
+def commit_claim_impl(
+    proposal_id: str,
+    principal: Principal,
+    conversation_id: str,
+    store: ClaimStore,
+) -> tuple[str, list[ClaimEvent]]:
+    """提交核心：原子状态迁移 + 幂等 + 审计。"""
+    if not conversation_id:
+        return "当前没有会话上下文，无法提交。", [ClaimEvent("commit", NOT_FOUND, proposal_id, None)]
+
+    result = store.commit(principal.user_id, conversation_id, proposal_id)
+    proposal = store.get(principal.user_id, conversation_id, proposal_id)
+    store.record(principal.user_id, conversation_id, proposal_id, "commit", result)
+
+    if proposal is None:
+        event = ClaimEvent("commit", result, proposal_id, None)
+        return "找不到可提交的报销提案，请重新发起申请。", [event]
+
+    summary = summarize(proposal.claim, proposal.proposal_id)
+    event = ClaimEvent("commit", result, proposal.proposal_id, proposal.claim,
+                       (), proposal.needs_dual_sign, summary)
+    if result == ALREADY_SUBMITTED:
+        return "该申请已经提交过了，无需重复提交。", [event]
+    if result == NOT_FOUND:
+        return "找不到可提交的报销提案，请重新发起申请。", [event]
+    return f"{summary}，已提交，等待审批。", [event]
+
+
+def make_propose_claim_tool(principal: Principal, conversation_id: str, store: ClaimStore):
+    @tool
+    def propose_expense_claim(
+        category: str,
+        amount: float,
+        nights: int = 0,
+        city_tier: str = "",
+        invoice_ids: list[str] | None = None,
+    ) -> tuple:
+        """发起一笔报销申请（只提案，不提交）。用户确认后必须再调用 commit_expense_claim。
+
+        参数 category：住宿 / 市内交通 / 餐饮补贴 / 高铁 / 飞机。
+        参数 amount：申请总金额（元）。nights 与 city_tier 仅在 category=住宿 时必填，
+        city_tier 取「一线」或「其他」。invoice_ids 为发票编号，除餐饮补贴外必填。
+        """
+        claim = Claim(
+            category=category,
+            amount=float(amount),
+            nights=int(nights or 0),
+            city_tier=city_tier or "",
+            invoice_ids=tuple(invoice_ids or ()),
+        )
+        return propose_claim_impl(claim, principal, conversation_id, store)
+
+    return propose_expense_claim
+
+
+def make_commit_claim_tool(principal: Principal, conversation_id: str, store: ClaimStore):
+    @tool
+    def commit_expense_claim(proposal_id: str) -> tuple:
+        """提交一个已经提案的报销申请。仅在用户明确确认后调用。
+
+        参数 proposal_id 为 propose_expense_claim 返回的提案编号；
+        不要自己编造编号，提交不存在的提案不会成功。
+        """
+        return commit_claim_impl(proposal_id, principal, conversation_id, store)
+
+    return commit_expense_claim
+
+
 def build_tools(
     principal: Principal,
     search_fn: Callable,
     registry: TableRegistry,
+    claim_store: ClaimStore,
     *,
+    conversation_id: str = "",
     max_top_k: int = 8,
     max_rows: int = 50,
     truncate: int = 500,
     default_top_k: int = 4,
 ) -> dict[str, Any]:
-    """per-request 构造工具闭包表。search_fn 生产环境传 app.retrieve_ranked。"""
+    """per-request 构造工具闭包表。search_fn 生产环境传 retrieval.retrieve_ranked。
+
+    写操作工具额外绑定 conversation_id：提案与确认都发生在某一个会话里，
+    没有会话就没有"确认"这个上下文。
+    """
     return {
         SEARCH_TOOL_NAME: make_search_tool(
             principal, search_fn, max_top_k, truncate, default_top_k
@@ -372,6 +498,8 @@ def build_tools(
         QUERY_TOOL_NAME: make_query_tool(principal, registry, max_rows),
         LIST_TOOL_NAME: make_list_tool(principal, registry),
         CLARIFY_TOOL_NAME: make_clarify_tool(),
+        PROPOSE_CLAIM_TOOL_NAME: make_propose_claim_tool(principal, conversation_id, claim_store),
+        COMMIT_CLAIM_TOOL_NAME: make_commit_claim_tool(principal, conversation_id, claim_store),
     }
 
 
@@ -433,6 +561,7 @@ def execute_tools(state: dict) -> dict:
     # 那就是白付一次精排（本机约 5s）。memo 只在单次请求的 state 里，
     # 不跨用户共享，因此不引入权限泄露面。
     memo: dict[str, tuple] = dict(state.get("search_memo") or {})
+    claim_events: list = list(state.get("claim_events") or [])
     clarified = False
     for call in calls:
         logger.info(
@@ -486,12 +615,17 @@ def execute_tools(state: dict) -> dict:
                 memo[memo_key] = (text, artifact)
         elif call["name"] == QUERY_TOOL_NAME:
             rows = merge_rows(rows, artifact)
-        # list_tables 的 artifact 为空，不累积证据
+        elif call["name"] in (PROPOSE_CLAIM_TOOL_NAME, COMMIT_CLAIM_TOOL_NAME):
+            # 写操作事件单独累积：它既不进 hits 也不进 table_rows，
+            # 由答案节点渲染成确认卡（不经过 LLM）。
+            claim_events.extend(artifact)
+        # list_tables / ask_clarification 的 artifact 为空，不累积证据
     return {
         "messages": outputs,
         "hits": hits,
         "table_rows": rows,
         "search_memo": memo,
+        "claim_events": claim_events,
         "clarification_requested": clarified or state.get("clarification_requested", False),
         "tool_rounds": state.get("tool_rounds", 0) + 1,
     }
