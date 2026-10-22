@@ -4,7 +4,7 @@
 [![CI](https://github.com/chen-1-xiaobei/RAG-kb/actions/workflows/ci.yml/badge.svg)](https://github.com/chen-1-xiaobei/RAG-kb/actions/workflows/ci.yml)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-1.0-1C3C3C)](https://langchain-ai.github.io/langgraph/)
-[![Tests](https://img.shields.io/badge/tests-133%20passed-brightgreen)](#测试与评测)
+[![Tests](https://img.shields.io/badge/tests-163%20passed-brightgreen)](#测试与评测)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 > 面向企业内部制度与流程问答的 Agentic RAG 系统。RAG 只是它可调用的工具之一：模型自主决定
@@ -174,6 +174,31 @@ curl.exe -s http://127.0.0.1:8000/agent/ask -H "Content-Type: application/json" 
 
 > **后端是模拟的。** 没有接真实 OA 系统——这里实现和验证的是**动作协议本身**（提案、确认、幂等、审计、策略校验），后端落在一张本地 SQLite 表里。
 
+### 流式回答（SSE）
+
+`POST /agent/ask/stream` 是 `/agent/ask` 的流式版本，事件序列固定：
+
+```text
+event: meta      {"conversation_id": "...", "stage": "retrieving"}
+event: token     {"text": "员工需在 "}          ← 若干条
+event: sources   {"sources": [{...}]}
+event: done      {"conversation_id": "...", "citations": [1], "insufficient_context": false}
+```
+
+```powershell
+curl.exe -N -s http://127.0.0.1:8000/agent/ask/stream -H "Content-Type: application/json" `
+  -H "X-Dev-Groups: %E8%B4%A2%E5%8A%A1" `
+  -d '{\"question\":\"报销要几天内提交？\"}'
+```
+
+三处值得说明的设计：
+
+- **流式路径不使用 `with_structured_output`。** 结构化输出要求完整 JSON，而 JSON **必须收完才能解析**，流式的意义就没了；此外 `response_format=json_object` 与流式还有已知的兼容问题（langchain-deepseek 会把内容聚合成单个 chunk）。所以流式改用**纯文本生成**，引用以行内 `[1]` 标记表达，生成结束后由服务端**解析并校验编号是否越界**——结构化输出那条路上的"citation 服务端校验"性质被完整保留。
+- **端点必须是 `async def`，但重活不能留在事件循环里。** agent 图执行是纯 CPU 的（检索 + 精排约 5s），必须 `run_in_threadpool` 丢进线程池；否则这 5 秒内整个服务都会失去响应，连 `/health` 都返不回来。这也是同步 `def` 端点在这里更省心的原因（FastAPI 会自动放进线程池）。
+- **检索先于生成，并先发一个 `meta` 事件。** 用户感知从"等 8 秒毫无反馈"变成"立刻有状态、随后字在往外冒"。响应头带 `X-Accel-Buffering: no`，避免反向代理把流攒成一次性下发。
+
+拒答、反问、写操作确认卡这三种"本来就是一句话"的结果**不经过流式生成**，直接作为一条 `token` 发出，客户端不必区分两种来源。
+
 ### 容器化运行
 
 ```powershell
@@ -214,6 +239,7 @@ docker compose up --build
 - **模型可见材料与答案证据解耦**：工具返回 `(text, artifact)`——给模型的是截断后的材料文本、不带 citation 编号；给答案节点的是完整证据。citation 编号只在答案节点组装时统一赋值，检索命中与表格行混合编号不冲突；表格行转伪 Document，Source 模型/citation 校验/拒答逻辑零改动复用。
 - **检索与 LLM 的模块解耦**：两段式检索独立在 `retrieval.py`，LLM 客户端改为惰性构造（`get_llm()`）。原因是 `app.py` 在 import 期构造 `ChatDeepSeek` 会立即校验 `DEEPSEEK_API_KEY`，而**检索、评测与单元测试都不需要 LLM**——放在 import 期会把"必须有真实密钥"变成整个模块的前置条件。这个耦合是 CI 抓出来的：评测任务在没有密钥的 runner 上直接失败。解耦后 CI 里不需要任何密钥，评测也才可能作为硬门禁。
 - **多轮对话的会话级权限隔离**：会话 ID 是客户端传入的新权限入口，因此会话绑定创建者身份与权限组指纹，读取前一并校验，失败统一 404；组关系变更即拒绝会话（历史答案正文里的受限内容不经过检索层，预过滤拦不住）。同时保证**每轮重新检索、不复用跨轮证据**（构造点唯一且硬编码为空），历史只用于指代改写且**不存工具原文**（结构上无法把注入内容跨轮回放）。会话追加用乐观锁防并发交错。
+- **流式的取舍：换掉结构化输出，而不是换模型**：`deepseek-chat` 支持流式，冲突在于 `with_structured_output` 要求完整 JSON、必须收完才能解析。因此流式路径改为纯文本 + 行内 `[n]` 引用，生成结束后由服务端解析并校验编号——把"citation 服务端校验"从"结构化字段"平移到了"文本标记"，性质没丢。另外 async 端点里**绝不跑同步 CPU 活**（图执行走 `run_in_threadpool`），否则事件循环被占满 5 秒、连 `/health` 都返不回来。
 - 表格工具安全三层：表名白名单 + SELECT-only 语法校验（单语句、禁注释与写关键字、FROM 必须等于白名单表）+ sqlite `set_authorizer` 数据库层授权（只放行对白名单表的 READ，语法被绕过也读不到其他表）；行数上限截断；工具异常/未知工具降级为 error ToolMessage 回给模型，循环不中断。
 - 提示词分离：agent 节点管"调什么工具收集资料"（规划），答案节点管"只能依据已收集证据作答"（生成），两条提示词各司其职。
 - **链路可观测**：两个端点各自输出结构化链路日志（`rag_query_start/done`、`agent_query_start/done`、`agent_decision`、`tool_call/tool_result`、`answer_gate`、`retrieve`、`answer_generate`），带毫秒时间戳与每步耗时（粗排/精排/LLM 决策/工具执行/生成分别计时），单看日志即可复盘一次请求的决策路径与耗时分布；问题文本只记前缀（`LOG_QUESTION_CHARS`，折叠空白防多行污染），不把用户原文写入日志。
@@ -241,7 +267,7 @@ python evaluate.py --update-baseline  # 人工确认指标后刷新 evals/baseli
 
 | 任务 | 内容 | 特点 |
 | --- | --- | --- |
-| `test` | `python -m pytest -q`（133 个离线单测） | 不下载模型、不调用 LLM，几十秒出结果 |
+| `test` | `python -m pytest -q`（163 个离线单测） | 不下载模型、不调用 LLM，几十秒出结果 |
 | `eval` | `python ingest.py` + `python evaluate.py` | 真实跑粗排 + 精排，**严格校验 `evals/baseline.json`**；不达标或相对基线回退即失败 |
 
 分工的理由：单测是"代码逻辑没坏"的快速反馈，评测是"检索质量没退化"的慢速把关，两者失败时的排查方向完全不同。
@@ -295,6 +321,7 @@ python evaluate.py --update-baseline  # 人工确认指标后刷新 evals/baseli
 这个项目是**单实例、单轮对话、只读**的形态，边界是主动划定的，不是遗漏：
 
 - **多轮对话的检索改写质量未纳入自动评测**：`evaluate.py` 是纯检索评测（不调用 LLM），它能验证"给定完整查询时检索是否正确"，但**无法验证模型把"那住宿标准呢"改写成什么**——那需要真实 LLM。当前多轮部分由离线单测覆盖（会话越权、组变更、跨轮证据不复用、反问三态），指代改写质量需人工验证。
+- **流式端点没有真实模型的自动化测试**：`streaming.py` 的纯函数（SSE 格式、引用解析、文本块提取）与生成器行为都有单测，整条 `_stream_events` 也用打桩 LLM 端到端验证过；但"真实 DeepSeek 的流式分块行为"只能人工验证。另外**客户端中途断开时不会落库**（生成器被取消），多轮上下文会缺失这一轮。
 - **知识库规模上限**：`JSONVectorStore` 每次查询做全量点积，面向万级 chunk 以内；再往上需要 FAISS/pgvector 之类带索引的实现。
 - **纯 CPU 精排约 4.5s/次**：这是 568M cross-encoder 的物理成本。要降只能量化或换更小的 reranker，且**必须重新标定阈值**（换模型后旧阈值不再有效）。
 - **评测集偏小**：39 条用例、5 个来源，指标已饱和。详见上方「实测指标」中的说明。

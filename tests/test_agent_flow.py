@@ -111,3 +111,31 @@ def test_graph_round_limit_terminates_loop():
     }))
     assert result["tool_rounds"] == 2
     assert result["response"] == "收敛"
+
+
+def test_defer_generation_flag_survives_graph():
+    """流式端点靠 defer_generation 让答案节点只判定门槛、不生成。
+
+    这个标志必须原样穿过整张图（agent -> tools -> answer），否则流式路径会退化成
+    "先阻塞生成完整答案再逐字回放"——那就不是流式了。
+    """
+    seen = {}
+
+    def answer_node(state):
+        seen["defer"] = state.get("defer_generation")
+        if state.get("defer_generation"):
+            return {"pending_evidence": []}
+        return {"response": "完整答案"}
+
+    graph = build_agent_graph(
+        lambda state: {"messages": [AIMessage(content="收手")]}, execute_tools, answer_node
+    )
+    result = graph.invoke(_state(defer_generation=True))
+    assert seen["defer"] is True
+    assert "pending_evidence" in result
+    assert "response" not in result
+
+    # 同一张图在非延迟模式下仍然返回完整响应
+    result = graph.invoke(_state())
+    assert not seen["defer"]
+    assert result["response"] == "完整答案"

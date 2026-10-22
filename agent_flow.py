@@ -40,6 +40,10 @@ class AgentState(TypedDict, total=False):
     # 本轮的写操作事件（提案 / 提交）。答案节点据此渲染确认卡，且**不调用 LLM**：
     # 金额与提案号由服务端渲染，模型无法在确认文案里改数字。
     claim_events: list[Any]
+    # 流式端点用：为 True 时答案节点只做"证据门槛判定"，把生成留给调用方去流式完成。
+    # 这样检索（阻塞）与生成（流式）在时间上分离，客户端能先收到检索中的状态。
+    defer_generation: bool
+    pending_evidence: list[Any]   # 延迟生成时带出的证据，供调用方流式生成
     tool_rounds: int       # 工具节点执行轮数，路由上限用
     response: Any
 

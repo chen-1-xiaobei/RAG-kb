@@ -10,11 +10,12 @@ INDEX = ROOT / "index.json"
 load_dotenv(ROOT / ".env")
 
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_deepseek import ChatDeepSeek
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from agent_flow import AgentState, build_agent_graph, build_evidence
 from auth import Principal, get_principal
@@ -32,6 +33,18 @@ from conversation import (
 )
 from rerank import warmup as rerank_warmup
 from retrieval import IndexConfigError, embeddings, index_manager, retrieve_ranked
+from streaming import (
+    EVENT_DONE,
+    EVENT_ERROR,
+    EVENT_META,
+    EVENT_SOURCES,
+    EVENT_TOKEN,
+    STREAM_SYSTEM_PROMPT,
+    StreamResult,
+    chunk_text,
+    sse,
+    stream_answer,
+)
 from tools import DATA, TableRegistry, build_tools, execute_tools
 
 logging.basicConfig(
@@ -264,6 +277,10 @@ def _agent_answer(state: AgentState) -> dict:
     )
 
     if action == "answer":
+        if state.get("defer_generation"):
+            # 流式端点：只判定门槛，把生成留给调用方边生成边下发。
+            # 门槛本身仍然是结构性的——没有证据在这一步就已经变成拒答了。
+            return {"pending_evidence": evidence}
         return {"response": generate_answer(state["question"], evidence, conversation_id)}
     return {"response": AskResponse(
         answer=text, sources=[], insufficient_context=True, conversation_id=conversation_id,
@@ -459,4 +476,141 @@ def agent_ask(req: AskRequest, principal: Principal = Depends(get_principal)):
         response.pending_clarification, (perf_counter() - started) * 1000,
     )
     return response
+
+
+# ---------------------------------------------------------------------------
+# 流式端点（SSE）
+#
+# 两个必须注意的点：
+# 1. 端点本身是 async def，因此**绝不能在事件循环里跑同步的重活**。agent 图的执行
+#    是纯 CPU 的（检索 + 精排约 5s），必须用 run_in_threadpool 丢到线程池，
+#    否则整个服务在这 5 秒内失去响应——包括 /health。
+# 2. 检索先于生成：先发一个 meta 事件告诉客户端"正在检索"，再开始流式吐字。
+#    用户感知上从"等 8 秒什么都不动"变成"立刻有反馈 + 字在往外冒"。
+# ---------------------------------------------------------------------------
+
+async def _stream_llm_chunks(question: str, evidence: list):
+    """把模型输出适配成纯文本块。
+
+    这里**刻意不用 with_structured_output**：结构化输出要求完整 JSON，
+    必须收完才能解析，流式的意义就没了。改用纯文本 + 行内 [n] 引用标记，
+    引用在生成结束后由服务端解析并校验。
+    """
+    docs = [doc for doc, _ in evidence]
+    messages = [
+        SystemMessage(STREAM_SYSTEM_PROMPT),
+        HumanMessage(
+            f"<knowledge_base>\n{format_docs(docs)}\n</knowledge_base>\n\n"
+            f"<question>{question}</question>"
+        ),
+    ]
+    async for chunk in get_llm().astream(messages):
+        text = chunk_text(chunk)
+        if text:
+            yield text
+
+
+async def _stream_events(question: str, conversation: Conversation, state: dict):
+    """SSE 事件生成器：检索 -> 判定 -> （流式生成 | 一次性下发）-> sources -> done。"""
+    started = perf_counter()
+    yield sse(EVENT_META, {
+        "conversation_id": conversation.conversation_id,
+        "stage": "retrieving",
+    })
+
+    try:
+        result = await run_in_threadpool(
+            agent_graph.invoke, state,
+            {"recursion_limit": 2 * settings.max_tool_rounds + 5},
+        )
+    except Exception:
+        # 堆栈只进日志，不下发给客户端
+        logger.exception("agent_stream_failed")
+        yield sse(EVENT_ERROR, {"message": "检索服务暂不可用，请稍后重试"})
+        return
+
+    response = result.get("response")
+    if response is not None:
+        # 拒答 / 反问 / 写操作确认卡：本来就是一句话，不需要流式生成。
+        # 复用同一条 token 事件，客户端不必区分两种来源。
+        yield sse(EVENT_TOKEN, {"text": response.answer})
+        yield sse(EVENT_SOURCES, {"sources": [item.model_dump() for item in response.sources]})
+        yield sse(EVENT_DONE, {
+            "conversation_id": response.conversation_id,
+            "citations": [item.citation for item in response.sources],
+            "insufficient_context": response.insufficient_context,
+            "pending_clarification": response.pending_clarification,
+            "pending_confirmation": response.pending_confirmation,
+        })
+        _persist(conversation, question, response)
+        logger.info(
+            "agent_stream_done mode=single sources=%s ms=%d",
+            len(response.sources), (perf_counter() - started) * 1000,
+        )
+        return
+
+    evidence = result.get("pending_evidence") or []
+    stream_result = StreamResult()
+    try:
+        async for event in stream_answer(
+            _stream_llm_chunks(question, evidence),
+            evidence,
+            conversation.conversation_id,
+            stream_result,
+        ):
+            yield event
+    except Exception:
+        logger.exception("agent_stream_generation_failed")
+        yield sse(EVENT_ERROR, {"message": "生成服务暂不可用，请稍后重试"})
+        return
+
+    # 落库用与同步端点相同的 Turn 语义：只存问答与来源名，不存原文
+    response = AskResponse(
+        answer=stream_result.text,
+        sources=[Source(**item) for item in stream_result.sources],
+        insufficient_context=False,
+        conversation_id=conversation.conversation_id,
+    )
+    _persist(conversation, question, response)
+    logger.info(
+        "agent_stream_done mode=stream chars=%d citations=%s ms=%d",
+        len(stream_result.text), stream_result.citations, (perf_counter() - started) * 1000,
+    )
+
+
+@app.post("/agent/ask/stream")
+async def agent_ask_stream(req: AskRequest, principal: Principal = Depends(get_principal)):
+    """Agentic RAG 的流式版本，SSE 事件：meta -> token* -> sources -> done。
+
+    会话鉴权在流开始**之前**完成：这样 404 还能正常返回一个 HTTP 状态码，
+    而不是先建立一条 200 的事件流再在里面报错。
+    """
+    if not settings.enable_agent:
+        raise HTTPException(404, "Agent endpoint is disabled")
+    logger.info(
+        "agent_stream_start user=%s question=%s",
+        principal.user_id, question_for_log(req.question),
+    )
+    conversation = _authorize(req, principal)
+    tools = build_tools(
+        principal, retrieve_ranked, table_registry, claim_store,
+        conversation_id=conversation.conversation_id,
+        max_top_k=settings.tool_top_k_max,
+        max_rows=settings.table_max_rows,
+        truncate=settings.tool_text_truncate,
+        default_top_k=settings.tool_default_top_k,
+    )
+    state = build_turn_state(req.question, principal, tools, conversation)
+    state["defer_generation"] = True
+
+    return StreamingResponse(
+        _stream_events(req.question, conversation, state),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            # 关掉反向代理的缓冲，否则流会被攒起来一次性发出，流式就白做了
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
