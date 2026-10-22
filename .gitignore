@@ -14,3 +14,6 @@ claims.db
 *.db-shm
 .cache/
 
+# 个人求职材料，不随仓库发布
+interview-prep.md
+
