@@ -11,6 +11,7 @@ load_dotenv(ROOT / ".env")
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import RedirectResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_deepseek import ChatDeepSeek
@@ -398,10 +399,19 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Enterprise Knowledge Base RAG", lifespan=lifespan)
 
+# 单文件前端（static/index.html）由同一个进程托管：
+# 不用额外的 Node 工具链、不用构建、也没有跨域问题。
+STATIC_DIR = ROOT / "static"
+if STATIC_DIR.is_dir():
+    app.mount("/ui", StaticFiles(directory=STATIC_DIR, html=True), name="ui")
+else:  # 静态文件缺失时仍能启动服务，只是没有界面
+    logger.warning("static/ 不存在，前端界面不可用；接口不受影响")
+
 
 @app.get("/")
 def root():
-    return RedirectResponse("/docs")
+    # 有前端就进界面，没有就回落到 API 文档
+    return RedirectResponse("/ui/" if STATIC_DIR.is_dir() else "/docs")
 
 
 @app.get("/health")

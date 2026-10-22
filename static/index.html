@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>企业知识库助手</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --border: #e3e6ea;
+    --text: #1f2328;
+    --muted: #6b7280;
+    --accent: #2563eb;
+    --accent-soft: #eef2ff;
+    --warn: #b45309;
+    --warn-soft: #fffbeb;
+    --danger: #b91c1c;
+    --danger-soft: #fef2f2;
+    --ok: #15803d;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    display: flex;
+    flex-direction: column;
+  }
+
+  header {
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 16px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  .status { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #cbd5e1; }
+  .dot.ok { background: var(--ok); }
+  .dot.bad { background: var(--danger); }
+
+  .settings { margin-left: auto; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .field { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); }
+  .field input, .field select {
+    font: inherit; font-size: 12px; color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 4px 6px; background: #fff;
+  }
+  .field input { width: 92px; }
+  .field input#groups { width: 110px; }
+
+  main { flex: 1; overflow-y: auto; padding: 20px 16px 8px; }
+  .thread { max-width: 780px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+
+  .msg { display: flex; flex-direction: column; gap: 6px; max-width: 100%; }
+  .msg.user { align-items: flex-end; }
+  .bubble {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 13px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-width: 100%;
+  }
+  .msg.user .bubble { background: var(--accent-soft); border-color: #dbe4ff; }
+  .bubble.think { color: var(--muted); font-style: italic; }
+  .bubble.refuse { background: var(--warn-soft); border-color: #fde68a; }
+  .bubble.clarify { background: #eff6ff; border-color: #bfdbfe; }
+  .bubble.error { background: var(--danger-soft); border-color: #fecaca; color: var(--danger); }
+  .bubble .cursor {
+    display: inline-block; width: 7px; height: 14px; margin-left: 2px;
+    background: var(--accent); vertical-align: -2px; animation: blink 1s steps(1) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .sources { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    font-size: 11px; line-height: 1.5;
+    background: #f3f4f6; border: 1px solid var(--border);
+    border-radius: 999px; padding: 2px 9px; color: var(--muted);
+    cursor: default;
+  }
+  .chip b { color: var(--accent); font-weight: 600; }
+
+  .card {
+    border: 1px solid #fcd34d; background: var(--warn-soft);
+    border-radius: var(--radius); padding: 12px 14px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .card .title { font-weight: 600; color: var(--warn); }
+  .card .row { font-size: 13px; }
+  .card button { align-self: flex-start; }
+
+  .meta { font-size: 11px; color: #9ca3af; }
+
+  footer {
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+    padding: 10px 16px 14px;
+  }
+  .composer { max-width: 780px; margin: 0 auto; display: flex; gap: 8px; align-items: flex-end; }
+  textarea {
+    flex: 1; resize: none; font: inherit; padding: 9px 11px;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    background: #fff; color: var(--text); min-height: 42px; max-height: 160px;
+  }
+  textarea:focus { outline: 2px solid #dbe4ff; border-color: #c7d2fe; }
+  button {
+    font: inherit; cursor: pointer; border-radius: var(--radius);
+    border: 1px solid var(--accent); background: var(--accent); color: #fff;
+    padding: 10px 16px; white-space: nowrap;
+  }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.ghost { background: #fff; color: var(--text); border-color: var(--border); padding: 8px 12px; }
+
+  .hint { max-width: 780px; margin: 6px auto 0; font-size: 11px; color: var(--muted); display: flex; gap: 14px; flex-wrap: wrap; }
+  .hint code { background: #f3f4f6; padding: 1px 5px; border-radius: 4px; }
+
+  details.debug {
+    max-width: 780px; margin: 10px auto 0; font-size: 11px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  }
+  details.debug summary { cursor: pointer; padding: 6px 10px; color: var(--muted); }
+  details.debug pre {
+    margin: 0; padding: 8px 10px; max-height: 200px; overflow: auto;
+    border-top: 1px solid var(--border); color: #374151; white-space: pre-wrap;
+  }
+  .empty { text-align: center; color: var(--muted); margin-top: 12vh; }
+  .empty h2 { font-size: 16px; font-weight: 600; color: var(--text); margin-bottom: 8px; }
+  .samples { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 16px; }
+  .samples button { background: #fff; color: var(--text); border-color: var(--border); font-size: 12px; padding: 7px 11px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>企业知识库助手</h1>
+  <span class="status"><span class="dot" id="healthDot"></span><span id="healthText">检查中…</span></span>
+  <div class="settings">
+    <label class="field">用户 <input id="user" value="demo" autocomplete="off"></label>
+    <label class="field">权限组 <input id="groups" value="财务" autocomplete="off"></label>
+    <label class="field">模式
+      <select id="mode">
+        <option value="stream" selected>Agentic（流式）</option>
+        <option value="agent">Agentic（一次性返回）</option>
+        <option value="fixed">固定管线</option>
+      </select>
+    </label>
+    <button class="ghost" id="newConv">新会话</button>
+  </div>
+</header>
+
+<main id="main">
+  <div class="thread" id="thread">
+    <div class="empty" id="empty">
+      <h2>问点什么试试</h2>
+      <div>检索 + 精排约 5 秒，流式模式下会先出现「正在检索」状态</div>
+      <div class="samples">
+        <button data-q="报销单的审批流程是什么？">报销单的审批流程是什么？</button>
+        <button data-q="出差住酒店一晚最多能报多少钱？">出差住酒店一晚最多能报多少钱？</button>
+        <button data-q="帮我报销上周去上海的住宿，两晚，1000 元">帮我报销住宿两晚 1000 元</button>
+        <button data-q="公司的火星基地地址是什么？">公司的火星基地地址是什么？</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="composer">
+    <textarea id="input" rows="1" placeholder="输入问题，Enter 发送，Shift+Enter 换行"></textarea>
+    <button id="send">发送</button>
+  </div>
+  <div class="hint">
+    <span>会话 <code id="convId">（新）</code></span>
+    <span>鉴权走 <code>X-Dev-User</code> / <code>X-Dev-Groups</code>（dev 模式）</span>
+    <span><a href="/docs" target="_blank">API 文档</a></span>
+  </div>
+  <details class="debug">
+    <summary>调试面板（原始事件与耗时）</summary>
+    <pre id="debugLog">—</pre>
+  </details>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  var state = { conversationId: null, busy: false };
+
+  var $ = function (id) { return document.getElementById(id); };
+  var thread = $("thread");
+  var input = $("input");
+  var sendBtn = $("send");
+  var debugLog = $("debugLog");
+  var debugLines = [];
+
+  // ---------- 工具 ----------
+
+  function debug(text) {
+    debugLines.push(text);
+    if (debugLines.length > 200) debugLines.shift();
+    debugLog.textContent = debugLines.join("\n");
+  }
+
+  // 权限组是中文，HTTP 头只能是 ASCII，所以这里百分号编码；服务端会 unquote
+  function encodeGroups(raw) {
+    return raw.split(",")
+      .map(function (s) { return s.trim(); })
+      .filter(Boolean)
+      .map(encodeURIComponent)
+      .join(",");
+  }
+
+  function buildHeaders() {
+    return {
+      "Content-Type": "application/json",
+      "X-Dev-User": $("user").value.trim() || "demo",
+      "X-Dev-Groups": encodeGroups($("groups").value)
+    };
+  }
+
+  function currentMode() { return $("mode").value; }
+
+  function endpointFor(mode) {
+    if (mode === "fixed") return "/ask";
+    if (mode === "agent") return "/agent/ask";
+    return "/agent/ask/stream";
+  }
+
+  function scrollToBottom() { $("main").scrollTop = $("main").scrollHeight; }
+
+  function setConvId(id) {
+    state.conversationId = id || null;
+    $("convId").textContent = id ? id.slice(0, 10) + "…" : "（新）";
+  }
+
+  // ---------- 消息渲染 ----------
+
+  function clearEmpty() {
+    var empty = $("empty");
+    if (empty && empty.parentNode) empty.parentNode.removeChild(empty);
+  }
+
+  function addMessage(role) {
+    clearEmpty();
+    var wrap = document.createElement("div");
+    wrap.className = "msg " + role;
+    var bubble = document.createElement("div");
+    bubble.className = "bubble";
+    wrap.appendChild(bubble);
+    thread.appendChild(wrap);
+    scrollToBottom();
+    return { wrap: wrap, bubble: bubble };
+  }
+
+  function renderSources(wrap, sources) {
+    if (!sources || !sources.length) return;
+    var box = document.createElement("div");
+    box.className = "sources";
+    sources.forEach(function (s) {
+      var chip = document.createElement("span");
+      chip.className = "chip";
+      chip.title = [
+        "来源: " + (s.source || ""),
+        "章节: " + (s.section || "—"),
+        "分组: " + (s.group || "—"),
+        "精排分: " + (typeof s.score === "number" ? s.score.toFixed(3) : s.score)
+      ].join("\n");
+      var num = document.createElement("b");
+      num.textContent = "[" + s.citation + "] ";
+      chip.appendChild(num);
+      chip.appendChild(document.createTextNode(s.source || "(未知来源)"));
+      box.appendChild(chip);
+    });
+    wrap.appendChild(box);
+  }
+
+  // 写操作确认卡：金额与提案号由服务端给出，前端只负责展示与回传
+  function renderProposal(wrap, proposal) {
+    if (!proposal) return;
+    var card = document.createElement("div");
+    card.className = "card";
+
+    var title = document.createElement("div");
+    title.className = "title";
+    title.textContent = proposal.pending_confirmation === false && proposal.result === "submitted"
+      ? "已提交" : "待确认的报销申请";
+    card.appendChild(title);
+
+    if (proposal.summary) {
+      var row1 = document.createElement("div");
+      row1.className = "row";
+      row1.textContent = proposal.summary;
+      card.appendChild(row1);
+    }
+    if (proposal.needs_dual_sign) {
+      var dual = document.createElement("div");
+      dual.className = "row";
+      dual.textContent = "单笔超过 5000 元，需要部门负责人与财务总监双签。";
+      card.appendChild(dual);
+    }
+    (proposal.violations || []).forEach(function (v) {
+      var row = document.createElement("div");
+      row.className = "row";
+      row.textContent = "· " + v;
+      card.appendChild(row);
+    });
+
+    if (proposal.proposal_id && proposal.result === "proposed") {
+      var btn = document.createElement("button");
+      btn.textContent = "确认提交（" + proposal.proposal_id + "）";
+      btn.addEventListener("click", function () {
+        btn.disabled = true;
+        send("确认提交提案 " + proposal.proposal_id);
+      });
+      card.appendChild(btn);
+    }
+
+    if (proposal.proposal_id) {
+      var meta = document.createElement("div");
+      meta.className = "meta";
+      meta.textContent = "提案号 " + proposal.proposal_id;
+      card.appendChild(meta);
+    }
+    wrap.appendChild(card);
+  }
+
+  // ---------- 状态 ----------
+
+  function setBusy(busy) {
+    state.busy = busy;
+    sendBtn.disabled = busy;
+    input.disabled = busy;
+    sendBtn.textContent = busy ? "处理中…" : "发送";
+    if (!busy) input.focus();
+  }
+
+  // ---------- 请求 ----------
+
+  function handlePayload(payload, parts) {
+    // parts: { wrap, bubble, sources }
+    if (!payload) return;
+    if (payload.conversation_id) setConvId(payload.conversation_id);
+
+    if (typeof payload.answer === "string" && !parts.streamed) {
+      parts.bubble.textContent = payload.answer;
+    }
+
+    if (payload.insufficient_context) parts.bubble.classList.add("refuse");
+    if (payload.pending_clarification) parts.bubble.classList.add("clarify");
+
+    renderSources(parts.wrap, payload.sources);
+    if (payload.proposal) {
+      payload.proposal.pending_confirmation = payload.pending_confirmation;
+      renderProposal(parts.wrap, payload.proposal);
+    }
+  }
+
+  function parsePayload(data) {
+    try { return JSON.parse(data); } catch (e) { return null; }
+  }
+
+  async function requestStream(question, parts) {
+    var started = performance.now();
+    var res = await fetch("/agent/ask/stream", {
+      method: "POST",
+      headers: buildHeaders(),
+      body: JSON.stringify({ question: question, conversation_id: state.conversationId })
+    });
+
+    if (!res.ok) {
+      var errBody = await res.text();
+      throw new Error("HTTP " + res.status + " " + errBody);
+    }
+
+    var reader = res.body.getReader();
+    var decoder = new TextDecoder("utf-8");
+    var buffer = "";
+    var streamedText = "";
+    var finalPayload = null;
+
+    while (true) {
+      var chunk = await reader.read();
+      if (chunk.done) break;
+      buffer += decoder.decode(chunk.value, { stream: true });
+
+      var idx;
+      while ((idx = buffer.indexOf("\n\n")) >= 0) {
+        var raw = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+
+        var name = "";
+        var dataLine = "";
+        raw.split("\n").forEach(function (line) {
+          if (line.indexOf("event:") === 0) name = line.slice(6).trim();
+          else if (line.indexOf("data:") === 0) dataLine += line.slice(5).trim();
+        });
+        if (!name) continue;
+
+        debug("+" + Math.round(performance.now() - started) + "ms  " + name + "  " + dataLine.slice(0, 120));
+        var data = parsePayload(dataLine);
+
+        if (name === "meta") {
+          parts.bubble.classList.add("think");
+          parts.bubble.textContent = "正在检索…";
+        } else if (name === "token") {
+          if (parts.bubble.classList.contains("think")) {
+            parts.bubble.classList.remove("think");
+            parts.bubble.textContent = "";
+          }
+          streamedText += (data && data.text) || "";
+          parts.bubble.textContent = streamedText;
+          scrollToBottom();
+        } else if (name === "sources") {
+          renderSources(parts.wrap, data && data.sources);
+        } else if (name === "done") {
+          finalPayload = data || {};
+        } else if (name === "error") {
+          throw new Error((data && data.message) || "服务异常");
+        }
+      }
+    }
+
+    parts.streamed = true;
+    if (finalPayload) {
+      if (finalPayload.conversation_id) setConvId(finalPayload.conversation_id);
+      if (finalPayload.insufficient_context) parts.bubble.classList.add("refuse");
+      if (finalPayload.pending_clarification) parts.bubble.classList.add("clarify");
+    }
+    debug("完成 " + Math.round(performance.now() - started) + "ms，字符 " + streamedText.length);
+  }
+
+  async function requestJson(url, question, parts) {
+    var started = performance.now();
+    var res = await fetch(url, {
+      method: "POST",
+      headers: buildHeaders(),
+      body: JSON.stringify({ question: question, conversation_id: state.conversationId })
+    });
+    var text = await res.text();
+    if (!res.ok) throw new Error("HTTP " + res.status + " " + text);
+    var payload = parsePayload(text);
+    debug("POST " + url + " " + Math.round(performance.now() - started) + "ms");
+
+    // 非流式下先显示占位，避免 5 秒内界面毫无反应
+    if (payload && payload.answer) handlePayload(payload, parts);
+    else throw new Error("响应格式异常");
+  }
+
+  // ---------- 主流程 ----------
+
+  async function send(text) {
+    var question = (text || input.value).trim();
+    if (!question || state.busy) return;
+
+    input.value = "";
+    setBusy(true);
+    clearEmpty();
+
+    addMessage("user").bubble.textContent = question;
+
+    var parts = addMessage("assistant");
+    parts.bubble.classList.add("think");
+    parts.bubble.textContent = currentMode() === "stream" ? "正在检索…" : "处理中（约 5~10 秒）…";
+    scrollToBottom();
+
+    try {
+      if (currentMode() === "stream") {
+        await requestStream(question, parts);
+      } else {
+        await requestJson(endpointFor(currentMode()), question, parts);
+      }
+    } catch (err) {
+      parts.bubble.classList.remove("think");
+      parts.bubble.classList.add("error");
+      parts.bubble.textContent = "请求失败：" + err.message;
+      debug("ERROR " + err.message);
+    } finally {
+      var cursor = parts.bubble.querySelector(".cursor");
+      if (cursor) cursor.remove();
+      setBusy(false);
+      scrollToBottom();
+    }
+  }
+
+  // ---------- 健康检查 ----------
+
+  async function checkHealth() {
+    try {
+      var res = await fetch("/health");
+      var data = await res.json();
+      var dot = $("healthDot");
+      var label = $("healthText");
+      if (data.ok) {
+        dot.className = "dot ok";
+        var meta = data.index || {};
+        label.textContent = "索引就绪（" + (meta.record_count || "?") + " 块 / " + (meta.embedding_model || "") + "）";
+      } else {
+        dot.className = "dot bad";
+        label.textContent = "索引不可用：" + (data.error || "未知原因");
+      }
+    } catch (e) {
+      $("healthDot").className = "dot bad";
+      $("healthText").textContent = "服务未启动";
+    }
+  }
+
+  // ---------- 事件绑定 ----------
+
+  sendBtn.addEventListener("click", function () { send(); });
+
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      send();
+    }
+  });
+
+  input.addEventListener("input", function () {
+    input.style.height = "auto";
+    input.style.height = Math.min(input.scrollHeight, 160) + "px";
+  });
+
+  $("newConv").addEventListener("click", function () {
+    setConvId(null);
+    thread.innerHTML =
+      '<div class="empty" id="empty"><h2>新会话已开始</h2>' +
+      '<div>上一轮的对话上下文不再带入</div></div>';
+    debug("--- 新会话 ---");
+    input.focus();
+  });
+
+  $("mode").addEventListener("change", function () {
+    debug("模式切换为 " + this.value);
+  });
+
+  document.querySelectorAll(".samples button").forEach(function (btn) {
+    btn.addEventListener("click", function () { send(btn.dataset.q); });
+  });
+
+  setConvId(null);
+  checkHealth();
+  input.focus();
+})();
+</script>
+</body>
+</html>

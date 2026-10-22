@@ -66,7 +66,24 @@ python ingest.py               # 首次运行会下载 bge-small-zh-v1.5 模型�
 uvicorn app:app --reload
 ```
 
-打开 <http://127.0.0.1:8000/docs> 交互调试。两个端点都返回 `answer` / `sources` / `insufficient_context`：
+打开 <http://127.0.0.1:8000> 使用**网页界面**（见下），或 <http://127.0.0.1:8000/docs> 直接调接口。
+
+### 网页界面
+
+前端是**单个静态文件** `static/index.html`（原生 JS，无构建步骤、无 Node 依赖），由同一个 FastAPI 进程挂在 `/ui/` 下，所以没有跨域问题。启动服务后直接访问根路径即可：
+
+| 能力 | 说明 |
+| --- | --- |
+| 三种模式 | Agentic（流式）/ Agentic（一次性）/ 固定管线，右上角切换 |
+| 流式渲染 | 用 `fetch` + `ReadableStream` 解析 SSE（`EventSource` 不支持 POST），逐字追加 |
+| 引用展示 | 每个来源渲染成 chip，悬停可见章节、分组与精排分 |
+| 写操作确认 | 提案以卡片形式出现，按钮把 `proposal_id` 显式带进下一句"确认提交提案 p_xxx" |
+| 身份模拟 | 顶部可改「用户 / 权限组」，权限组自动做 URL 编码后放进 `X-Dev-Groups` |
+| 调试面板 | 折叠区展示原始 SSE 事件与每条事件的相对时间戳，便于观察检索/生成的分段耗时 |
+
+会话 ID 显示在底部，点「新会话」即丢弃上下文。因为精排要 5 秒左右，流式模式下会先显示「正在检索…」——这也是加流式的主要理由：**感知延迟**。
+
+接口调用示例：
 
 ```powershell
 # 固定管线：retrieve -> rerank -> answer
