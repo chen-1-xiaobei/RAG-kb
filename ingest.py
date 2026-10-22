@@ -15,13 +15,17 @@ INDEX = ROOT / "index.json"
 # 必须先于 huggingface_hub 相关导入执行：HF_HUB_OFFLINE 在 huggingface_hub 导入时读取一次
 load_dotenv(ROOT / ".env")
 
-from langchain_core.documents import Document
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from envfix import sanitize_proxy_env  # noqa: E402
 
-from config import settings
-from kb_store import JSONVectorStore
-from loaders import load_document,LOADERS
+sanitize_proxy_env()  # 同上：必须在 huggingface_hub 导入前修正 NO_PROXY
+
+from langchain_core.documents import Document  # noqa: E402
+from langchain_huggingface import HuggingFaceEmbeddings  # noqa: E402
+from langchain_text_splitters import RecursiveCharacterTextSplitter  # noqa: E402
+
+from config import settings  # noqa: E402
+from kb_store import JSONVectorStore  # noqa: E402
+from loaders import LOADERS, load_document  # noqa: E402
 
 EMBEDDING_MODEL = settings.embedding_model
 CHUNK_SIZE = 700

@@ -9,7 +9,13 @@ ROOT = Path(__file__).parent
 INDEX = ROOT / "index.json"
 load_dotenv(ROOT / ".env")
 
-from fastapi import Depends, FastAPI, HTTPException
+# 早于 retrieval（它会拉起 huggingface_hub）执行，修掉 NO_PROXY 里 httpx 解析不了的写法。
+# 详见 envfix 模块的说明：否则启动会以一大坨与业务无关的 traceback 失败。
+from envfix import sanitize_proxy_env  # noqa: E402
+
+sanitize_proxy_env()
+
+from fastapi import Depends, FastAPI, HTTPException  # noqa: E402
 from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage

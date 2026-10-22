@@ -13,12 +13,18 @@ from pathlib import Path
 from threading import RLock
 from time import perf_counter
 
-from langchain_huggingface import HuggingFaceEmbeddings
+# 必须早于 langchain_huggingface 导入：它会拉起 huggingface_hub，
+# 后者一创建 HTTP 客户端就会因 NO_PROXY 里的方括号条目抛 InvalidURL。
+from envfix import sanitize_proxy_env  # noqa: E402
 
-from auth import Principal
-from config import settings
-from kb_store import JSONVectorStore
-from rerank import rerank
+sanitize_proxy_env()
+
+from langchain_huggingface import HuggingFaceEmbeddings  # noqa: E402
+
+from auth import Principal  # noqa: E402
+from config import settings  # noqa: E402
+from kb_store import JSONVectorStore  # noqa: E402
+from rerank import rerank  # noqa: E402
 
 ROOT = Path(__file__).parent
 INDEX = ROOT / "index.json"

@@ -57,14 +57,25 @@ flowchart TB
 
 ```powershell
 python -m venv .venv
-.venv\Scripts\Activate.ps1
+.venv\Scripts\Activate.ps1                 # cmd 里用 .venv\Scripts\activate.bat
 pip install torch --index-url https://download.pytorch.org/whl/cpu   # CPU 版 torch，避免数 GB CUDA 依赖
 pip install -r requirements.txt
 Copy-Item .env.example .env    # .env 已存在则跳过
 # 编辑 .env，填入 DEEPSEEK_API_KEY（仅对话需要；embedding 用本地模型，无需 key）
 python ingest.py               # 首次运行会下载 bge-small-zh-v1.5 模型，建立 index.json
-uvicorn app:app --reload
+.venv\Scripts\python.exe -m uvicorn app:app --reload
 ```
+
+> **启动务必用 `.venv\Scripts\python.exe -m uvicorn`，不要直接敲 `uvicorn`。**
+> 直接敲 `uvicorn` 依赖"虚拟环境已激活"这个前提：在 cmd 里执行 `Activate.ps1`（PowerShell 脚本）
+> 不会生效，`uvicorn` 就会落到全局 Python 上，报 `ModuleNotFoundError: No module named 'langchain_core'`。
+> 激活成功的标志是提示符前出现 `(.venv)`；显式指定解释器则与 PATH 无关，两种 shell 都通用。
+
+> **常见启动失败：`httpx.InvalidURL: Invalid port: ':1]'`。**
+> 原因是 `NO_PROXY` 里存在 `[::1]` 这样的方括号条目——httpx 会把每个条目当 URL 解析，
+> 于是把 `[::1]` 读成端口 `:1]`。`envfix.sanitize_proxy_env()` 会在导入模型相关库之前
+> **自动把方括号形式规范化**（`[::1]` → `::1`，语义不变）并打一条 warning，因此无需手工处理。
+> 该修补有独立单测（`tests/test_envfix.py`），其中一条直接断言"规范化后 httpx 能建客户端"。
 
 打开 <http://127.0.0.1:8000> 使用**网页界面**（见下），或 <http://127.0.0.1:8000/docs> 直接调接口。
 
