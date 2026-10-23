@@ -26,6 +26,7 @@ from starlette.concurrency import run_in_threadpool
 
 from agent_flow import AgentState, build_agent_graph, build_evidence
 from auth import Principal, get_principal
+import cassette
 from claims import ClaimStore, render
 from clarification import REFUSAL_TEXT, decide
 from config import settings
@@ -73,16 +74,20 @@ _llm: ChatDeepSeek | None = None
 _answer_chain = None
 
 
-def get_llm() -> ChatDeepSeek:
+def get_llm():
     """惰性构造 LLM 客户端。
 
     不在 import 期构造的原因：构造会立即校验 DEEPSEEK_API_KEY，而检索、评测与
     单元测试这些路径根本不需要 LLM。放在 import 期会把"必须有真实密钥"变成整个
     模块的前置条件，评测也就无法作为不依赖密钥的 CI 门禁。
+
+    如果设置了环境变量 LLM_CASSETTE，会套上录制/回放层（见 cassette.py）：
+    这样同一个会话可以在 CI 里确定性重跑，不需要密钥、不花一分钱。
     """
     global _llm
     if _llm is None:
-        _llm = ChatDeepSeek(model=settings.chat_model, temperature=0)
+        real = ChatDeepSeek(model=settings.chat_model, temperature=0)
+        _llm = cassette.wrap(real, model_name=settings.chat_model)
     return _llm
 
 

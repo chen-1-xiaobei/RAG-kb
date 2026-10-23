@@ -1,10 +1,10 @@
-# 企业知识库问答系统（RAG + LangGraph Agent）
+﻿# 企业知识库问答系统（RAG + LangGraph Agent）
 
 [![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![CI](https://github.com/chen-1-xiaobei/RAG-kb/actions/workflows/ci.yml/badge.svg)](https://github.com/chen-1-xiaobei/RAG-kb/actions/workflows/ci.yml)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-1.0-1C3C3C)](https://langchain-ai.github.io/langgraph/)
-[![Tests](https://img.shields.io/badge/tests-163%20passed-brightgreen)](#测试与评测)
+[![Tests](https://img.shields.io/badge/tests-197%20passed-brightgreen)](#测试与评测)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 > 面向企业内部制度与流程问答的 Agentic RAG 系统。RAG 只是它可调用的工具之一：模型自主决定
@@ -295,7 +295,7 @@ python evaluate.py --update-baseline  # 人工确认指标后刷新 evals/baseli
 
 | 任务 | 内容 | 特点 |
 | --- | --- | --- |
-| `test` | `python -m pytest -q`（163 个离线单测） | 不下载模型、不调用 LLM，几十秒出结果 |
+| `test` | `python -m pytest -q`（197 个离线单测） | 不下载模型、不调用 LLM，几十秒出结果 |
 | `eval` | `python ingest.py` + `python evaluate.py` | 真实跑粗排 + 精排，**严格校验 `evals/baseline.json`**；不达标或相对基线回退即失败 |
 
 分工的理由：单测是"代码逻辑没坏"的快速反馈，评测是"检索质量没退化"的慢速把关，两者失败时的排查方向完全不同。
@@ -344,12 +344,40 @@ python evaluate.py --update-baseline  # 人工确认指标后刷新 evals/baseli
 
 `index.json` 是生成物，已加入 `.gitignore`。更换 embedding 模型后必须重新执行 `python ingest.py`；跑评测前同样需要先建好索引。
 
+### 确定性回放：把 Agent 端到端测起来（`cassette.py`）
+
+上面那套评测只覆盖检索，**Agent 循环本身测不了**——它依赖模型，而模型每次输出都不一样：没有密钥跑不起来，跑起来结果也不稳定，进不了 CI。改一个提示词，你甚至不知道是变好还是变坏，因为"之前的样子"没存下来。
+
+做法是给模型套一层**录音机**：每次调用的输入和输出都存进一个 JSON 文件（cassette），回放时按输入查表返回当时那一条。
+
+```powershell
+# 录制：正常对话，每次模型调用都会写进 my_session.json
+$env:LLM_CASSETTE="my_session.json"; $env:LLM_CASSETTE_MODE="record"
+.venv\Scripts\python.exe -m uvicorn app:app
+
+# 回放：不碰网络、不需要密钥，同一会话逐字节复现
+$env:LLM_CASSETTE_MODE="replay"      # 不设 MODE 时默认就是 replay
+```
+
+三个设计要点：
+
+- **查不到记录就抛错，绝不静默返回空。** `CassetteMissing` 是刻意的设计——"测试全绿但其实什么都没测"比测试红危险得多。
+- **键里包含工具集合。** 增删工具会让旧 cassette 失效，这是对的：工具变了，模型的决策依据也变了，旧记录不能代表新行为。`additional_kwargs` 这类每次都不同的元数据则被排除，否则键永远对不上。
+- **同一输入多次调用按顺序消费。** 模型对相同输入给出不同输出是正常的，存成列表、按到达顺序取。
+
+**它补上了此前承认的那条空白。** `tests/cassettes/multiturn_rewrite.json` 录了一个两轮场景：第 1 轮「报销要几天内提交？」，第 2 轮「那住宿标准呢？」。回放测试断言**第 2 轮的检索查询不是那句指代句，而是被改写成了「出差住宿报销标准是多少」**——多轮改写质量第一次进了 CI，而且不需要密钥、不花钱。固件可用 `python tests/record_fixture.py` 重新生成。
+
+**覆盖范围要说清**：只覆盖 `bind_tools(...).invoke / astream` 这条决策路径（选工具、写查询、轮数控制）。答案生成走结构化输出，回放模式不支持，会明确抛 `NotImplementedError`——与其返回一个"看起来能用"的对象，不如直接失败。
+
+**它保证什么、不保证什么**：固件是"某一次真实行为的快照"，所以它保证的是**交互形状没退化**（工具调用顺序、查询改写方式、参数结构），不保证"当前模型的质量"。换了模型或改了提示词，应当重新录制。
+
 ## 已知边界与下一步
 
-这个项目是**单实例、单轮对话、只读**的形态，边界是主动划定的，不是遗漏：
+这个项目是**单实例、多轮、含写操作**的形态，边界是主动划定的，不是遗漏：
 
-- **多轮对话的检索改写质量未纳入自动评测**：`evaluate.py` 是纯检索评测（不调用 LLM），它能验证"给定完整查询时检索是否正确"，但**无法验证模型把"那住宿标准呢"改写成什么**——那需要真实 LLM。当前多轮部分由离线单测覆盖（会话越权、组变更、跨轮证据不复用、反问三态），指代改写质量需人工验证。
+- **多轮改写的"质量"仍不在 CI 里实时评估**：`cassette` 把某一次真实改写行为锁进了固件，能保证"改写这个动作没退化"，但它衡量不了"当前模型改得好不好"——后者需要每次录新样本并人工判断。两者互补，不能互相替代。
 - **流式端点没有真实模型的自动化测试**：`streaming.py` 的纯函数（SSE 格式、引用解析、文本块提取）与生成器行为都有单测，整条 `_stream_events` 也用打桩 LLM 端到端验证过；但"真实 DeepSeek 的流式分块行为"只能人工验证。另外**客户端中途断开时不会落库**（生成器被取消），多轮上下文会缺失这一轮。
+- **cassette 不覆盖答案生成**：只覆盖 `bind_tools` 决策路径；结构化输出在回放模式下明确报错，不静默降级。
 - **知识库规模上限**：`JSONVectorStore` 每次查询做全量点积，面向万级 chunk 以内；再往上需要 FAISS/pgvector 之类带索引的实现。
 - **纯 CPU 精排约 4.5s/次**：这是 568M cross-encoder 的物理成本。要降只能量化或换更小的 reranker，且**必须重新标定阈值**（换模型后旧阈值不再有效）。
 - **评测集偏小**：39 条用例、5 个来源，指标已饱和。详见上方「实测指标」中的说明。

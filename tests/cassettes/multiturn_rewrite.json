@@ -1,0 +1,153 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "key": "8ad8b3b526c933d8",
+      "request": {
+        "model": "deepseek-chat",
+        "tools": [
+          "search_knowledge_base"
+        ],
+        "messages": [
+          {
+            "role": "system",
+            "content": "你是企业知识库助手。问题涉及企业制度、流程、手册时调用 search_knowledge_base 检索；多轮对话中，检索查询必须是完整的、不依赖上下文也能看懂的句子。"
+          },
+          {
+            "role": "human",
+            "content": "报销要几天内提交？"
+          }
+        ]
+      },
+      "response": {
+        "content": "",
+        "tool_calls": [
+          {
+            "name": "search_knowledge_base",
+            "args": {
+              "question": "报销单提交时限是多久",
+              "top_k": 4
+            },
+            "id": "c1"
+          }
+        ]
+      }
+    },
+    {
+      "key": "668805893875cc6d",
+      "request": {
+        "model": "deepseek-chat",
+        "tools": [
+          "search_knowledge_base"
+        ],
+        "messages": [
+          {
+            "role": "system",
+            "content": "你是企业知识库助手。问题涉及企业制度、流程、手册时调用 search_knowledge_base 检索；多轮对话中，检索查询必须是完整的、不依赖上下文也能看懂的句子。"
+          },
+          {
+            "role": "human",
+            "content": "报销要几天内提交？"
+          },
+          {
+            "role": "ai",
+            "content": "",
+            "tool_calls": [
+              {
+                "name": "search_knowledge_base",
+                "args": {
+                  "question": "报销单提交时限是多久",
+                  "top_k": 4
+                },
+                "id": "c1"
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "命中 1 条资料：员工需在费用发生后三十天内提交报销单。",
+            "tool_call_id": "c1"
+          }
+        ]
+      },
+      "response": {
+        "content": "资料已足够",
+        "tool_calls": []
+      }
+    },
+    {
+      "key": "058e4f3aad63bd6d",
+      "request": {
+        "model": "deepseek-chat",
+        "tools": [
+          "search_knowledge_base"
+        ],
+        "messages": [
+          {
+            "role": "system",
+            "content": "你是企业知识库助手。问题涉及企业制度、流程、手册时调用 search_knowledge_base 检索；多轮对话中，检索查询必须是完整的、不依赖上下文也能看懂的句子。\n<conversation_history>\n用户: 报销要几天内提交？\n助手: 员工需在费用发生后三十天内提交报销单。\n</conversation_history>"
+          },
+          {
+            "role": "human",
+            "content": "那住宿标准呢？"
+          }
+        ]
+      },
+      "response": {
+        "content": "",
+        "tool_calls": [
+          {
+            "name": "search_knowledge_base",
+            "args": {
+              "question": "出差住宿报销标准是多少",
+              "top_k": 4
+            },
+            "id": "c2"
+          }
+        ]
+      }
+    },
+    {
+      "key": "8b0c472741e26cb1",
+      "request": {
+        "model": "deepseek-chat",
+        "tools": [
+          "search_knowledge_base"
+        ],
+        "messages": [
+          {
+            "role": "system",
+            "content": "你是企业知识库助手。问题涉及企业制度、流程、手册时调用 search_knowledge_base 检索；多轮对话中，检索查询必须是完整的、不依赖上下文也能看懂的句子。\n<conversation_history>\n用户: 报销要几天内提交？\n助手: 员工需在费用发生后三十天内提交报销单。\n</conversation_history>"
+          },
+          {
+            "role": "human",
+            "content": "那住宿标准呢？"
+          },
+          {
+            "role": "ai",
+            "content": "",
+            "tool_calls": [
+              {
+                "name": "search_knowledge_base",
+                "args": {
+                  "question": "出差住宿报销标准是多少",
+                  "top_k": 4
+                },
+                "id": "c2"
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "命中 1 条资料：员工需在费用发生后三十天内提交报销单。",
+            "tool_call_id": "c2"
+          }
+        ]
+      },
+      "response": {
+        "content": "资料已足够",
+        "tool_calls": []
+      }
+    }
+  ]
+}
