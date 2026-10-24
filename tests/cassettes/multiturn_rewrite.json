@@ -76,7 +76,7 @@
       }
     },
     {
-      "key": "058e4f3aad63bd6d",
+      "key": "6b7c248cd0a3f26c",
       "request": {
         "model": "deepseek-chat",
         "tools": [
@@ -85,7 +85,15 @@
         "messages": [
           {
             "role": "system",
-            "content": "你是企业知识库助手。问题涉及企业制度、流程、手册时调用 search_knowledge_base 检索；多轮对话中，检索查询必须是完整的、不依赖上下文也能看懂的句子。\n<conversation_history>\n用户: 报销要几天内提交？\n助手: 员工需在费用发生后三十天内提交报销单。\n</conversation_history>"
+            "content": "你是企业知识库助手。问题涉及企业制度、流程、手册时调用 search_knowledge_base 检索；多轮对话中，检索查询必须是完整的、不依赖上下文也能看懂的句子。"
+          },
+          {
+            "role": "human",
+            "content": "报销要几天内提交？"
+          },
+          {
+            "role": "ai",
+            "content": "员工需在费用发生后三十天内提交报销单。"
           },
           {
             "role": "human",
@@ -108,7 +116,7 @@
       }
     },
     {
-      "key": "8b0c472741e26cb1",
+      "key": "520f3eb6940c5164",
       "request": {
         "model": "deepseek-chat",
         "tools": [
@@ -117,7 +125,15 @@
         "messages": [
           {
             "role": "system",
-            "content": "你是企业知识库助手。问题涉及企业制度、流程、手册时调用 search_knowledge_base 检索；多轮对话中，检索查询必须是完整的、不依赖上下文也能看懂的句子。\n<conversation_history>\n用户: 报销要几天内提交？\n助手: 员工需在费用发生后三十天内提交报销单。\n</conversation_history>"
+            "content": "你是企业知识库助手。问题涉及企业制度、流程、手册时调用 search_knowledge_base 检索；多轮对话中，检索查询必须是完整的、不依赖上下文也能看懂的句子。"
+          },
+          {
+            "role": "human",
+            "content": "报销要几天内提交？"
+          },
+          {
+            "role": "ai",
+            "content": "员工需在费用发生后三十天内提交报销单。"
           },
           {
             "role": "human",

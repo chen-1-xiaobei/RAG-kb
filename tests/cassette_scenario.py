@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from agent_flow import build_agent_graph
 from tools import SEARCH_TOOL_NAME, execute_tools
@@ -24,13 +24,12 @@ AGENT_PROMPT = (
     "你是企业知识库助手。问题涉及企业制度、流程、手册时调用 search_knowledge_base 检索；"
     "多轮对话中，检索查询必须是完整的、不依赖上下文也能看懂的句子。"
 )
-# 第 2 轮把上一轮对话塞进 system prompt，模拟 app.build_rewrite_context 的做法
-HISTORY_TURN_1 = (
-    "<conversation_history>\n"
-    "用户: 报销要几天内提交？\n"
-    "助手: 员工需在费用发生后三十天内提交报销单。\n"
-    "</conversation_history>"
-)
+# 第 2 轮把上一轮对话作为**真实角色的消息**带入，与 app._agent_agent 一致：
+# 历史是 HumanMessage / AIMessage，系统提示词里不掺任何用户文本。
+HISTORY_TURN_1 = [
+    HumanMessage("报销要几天内提交？"),
+    AIMessage("员工需在费用发生后三十天内提交报销单。"),
+]
 
 
 class FakeDoc:
@@ -64,12 +63,10 @@ def build(model, queries: list[str]):
 
     def agent_node(state):
         # 与 app._agent_agent 的做法一致：历史拼接在 system 里，不混进消息列表
-        system = AGENT_PROMPT
-        history = state.get("history") or ""
-        if history:
-            system = f"{system}\n{history}"
         bound = model.bind_tools([tool])
-        response = bound.invoke([SystemMessage(system), *state["messages"]])
+        response = bound.invoke(
+            [SystemMessage(AGENT_PROMPT), *(state.get("history") or []), *state["messages"]]
+        )
         return {"messages": [response]}
 
     def tools_node(state):
@@ -82,7 +79,7 @@ def build(model, queries: list[str]):
     return graph, tool
 
 
-def run_turn(model, question: str, history: str = "") -> TurnResult:
+def run_turn(model, question: str, history: list | None = None) -> TurnResult:
     """跑一轮对话，返回模型实际给出的检索查询。"""
     queries: list[str] = []
     graph, tool = build(model, queries)
@@ -94,7 +91,7 @@ def run_turn(model, question: str, history: str = "") -> TurnResult:
         "table_rows": [],
         "search_memo": {},
         "tool_rounds": 0,
-        "history": history,
+        "history": history or [],
         "conversation_id": "conv-cassette",
     })
     return TurnResult(queries, result.get("response"), len(result.get("messages", [])))

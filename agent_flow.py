@@ -20,8 +20,10 @@ class AgentState(TypedDict, total=False):
     groups: list[str]
     # 会话标识（无会话时为空串）。只用于回传响应与落库，不参与权限判定。
     conversation_id: str
-    # 仅供查询改写的对话上下文（最近 N 轮问答，有界、无原文、已标注不可信）。
-    history: str
+    # 仅供理解指代的对话上下文：**真实角色的消息**（HumanMessage / AIMessage），
+    # 由 conversation.build_history_messages 生成。刻意不是字符串——不拼进 system
+    # 提示词，避免用户文本被提权成系统指令。
+    history: list[AnyMessage]
     # 对话消息：AIMessage.tool_calls 与 ToolMessage.tool_call_id 一一对应，
     # 模型据此把工具结果与调用对上号
     messages: Annotated[list[AnyMessage], add_messages]

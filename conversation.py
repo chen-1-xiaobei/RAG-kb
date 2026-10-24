@@ -27,7 +27,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 
+from langchain_core.messages import AIMessage, HumanMessage
+
 PUBLIC_GROUP = "public"
+# 历史消息的长度上限：只用于改写检索查询，不需要完整复述
+MAX_HISTORY_QUESTION_CHARS = 300
+MAX_HISTORY_ANSWER_CHARS = 120
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS conversations (
@@ -268,29 +273,48 @@ def authorize_session(store: ConversationStore, conversation_id: str | None,
     return conversation
 
 
-def build_rewrite_context(store: ConversationStore, conversation: Conversation | None,
-                          max_turns: int = 3) -> str:
-    """仅供查询改写的对话上下文：最近 N 轮问答，有界、无原文、明确标注不可信。
+def build_history_messages(store: ConversationStore, conversation: Conversation | None,
+                           max_turns: int = 3) -> list:
+    """把最近几轮对话还原成**真实角色的消息**，供模型理解指代。
 
-    反问轮次不进入常规上下文（它没提供新信息），用户对反问的回答本身就是新的
-    user turn，会自然带上指代上下文。
+    为什么是消息列表，而不是拼成一个字符串塞进 system prompt：
+
+    以前的实现把「用户: … / 助手: …」拼成一段文本、以 system 角色传给模型。这有两个
+    结构性缺陷——(1) 用户说的话被**提权**到了 system；(2) 纯字符串拼接没有转义，
+    用户只要在自己的话里写一个 `</conversation_history>` 就能提前闭合保护区，
+    或者在文本里换行伪造出「助手: …」这一行。
+
+    改成真实消息之后，隔离由**API 的消息结构**保证，而不是由提示词里的标签保证：
+    用户说的话天然是 user 角色，模型的回答天然是 assistant 角色，**没有任何写法
+    能把自己伪造成 system**。这也符合项目一贯的原则——安全靠结构，不靠提示词自觉。
+
+    内容上也做了收敛（最小暴露）：
+    - 只取最近 max_turns 轮，反问轮次不进历史（它没提供新信息）；
+    - 问题截断到 300 字、回答截断到 120 字——历史只用于改写检索查询，
+      不需要完整复述，截断同时压低了注入面与上下文长度。
     """
     if conversation is None:
-        return ""
+        return []
     recent = [turn for turn in store.turns(conversation.conversation_id, limit=max_turns * 2)
               if not turn.pending_clarification]
-    if not recent:
-        return ""
-    lines = [
-        f"{'用户' if turn.role == 'user' else '助手'}: {turn.content}"
-        for turn in recent
-    ]
-    return "<conversation_history>\n" + "\n".join(lines) + "\n</conversation_history>"
+    messages: list = []
+    for turn in recent:
+        text = " ".join(turn.content.split())      # 折叠空白，防止伪造多行结构
+        if not text:
+            continue
+        if turn.role == "user":
+            messages.append(HumanMessage(content=text[:MAX_HISTORY_QUESTION_CHARS]))
+        else:
+            messages.append(AIMessage(content=text[:MAX_HISTORY_ANSWER_CHARS]))
+    return messages
 
 
 def build_turn_state(question: str, conversation: Conversation | None,
-                     history: str, **fields) -> dict:
+                     history: list, **fields) -> dict:
     """构造本轮 agent state —— **规则 A 的唯一执行点**。
+
+    `history` 是**真实角色的消息列表**（见 build_history_messages），会与当前问题一起
+    作为消息传给模型；系统提示词里不再掺入任何用户文本。
 
     证据字段一律硬编码为空：不跨轮继承，签名也不接受"上一轮的 state"。
     想让旧证据复活就得改这个函数，让违规变得显眼而不是顺手。
