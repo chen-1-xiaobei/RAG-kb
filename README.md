@@ -1,4 +1,4 @@
-﻿# 企业知识库问答系统（RAG + LangGraph Agent）
+# 企业知识库问答系统（RAG + LangGraph Agent）
 
 [![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![CI](https://github.com/chen-1-xiaobei/RAG-kb/actions/workflows/ci.yml/badge.svg)](https://github.com/chen-1-xiaobei/RAG-kb/actions/workflows/ci.yml)
@@ -111,6 +111,10 @@ curl.exe -s http://127.0.0.1:8000/agent/ask -H "Content-Type: application/json" 
 `X-Dev-Groups` 只能传 ASCII，中文组名需 URL 编码（`财务` = `%E8%B4%A2%E5%8A%A1`）；开发模式通过
 `X-Dev-User` / `X-Dev-Groups` 请求头模拟已验证身份，生产环境设置 `AUTH_MODE=jwt`，权限从 JWT 的
 `sub/groups` claims 获取，**客户端不能在请求体中声明权限**。
+
+> ⚠️ **`AUTH_MODE` 默认是 `dev`**：任何客户端只要带上 `X-Dev-Groups` 就能自称任意权限组。
+> 服务启动时会打印醒目告警，`/health` 也会返回当前 `auth_mode` 供运维告警。
+> **部署到任何非本机环境前必须改成 `jwt` 并配置 `JWT_SECRET`。**
 
 示例响应（截断）：
 

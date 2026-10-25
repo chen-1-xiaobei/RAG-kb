@@ -92,16 +92,28 @@ def test_source_names_are_unique_across_groups(dataset):
 
 
 def test_data_dir_has_no_unregistered_indexable_file(dataset):
-    """反向检查：data/ 下新增了可索引文件却忘了登记到注册表，用例就会悄悄失效。"""
+    """反向检查：data/ 下新增了可索引文件却忘了登记到注册表，用例就会悄悄失效。
+
+    这条只比"可索引后缀"与"声明了 indexed=true 的登记项"。声明为
+    `indexed: false` 的文件（如 data/README.md、未被 loader 支持的 .xlsx）
+    由下一条 `test_registry_accounts_for_every_file_in_data` 负责覆盖——
+    两条各管一个方向，不要混在一起，否则新增一种"不索引"的文件类型就会误报。
+    """
     registered = {entry["path"] for entry in indexed_entries(dataset)}
-    skip = {entry["path"] for entry in dataset["sources"] if not entry.get("indexed", True)}
     indexable = {
         path.relative_to(DATA).as_posix()
         for path in DATA.rglob("*")
         if path.suffix.lower() in {".md", ".txt", ".pdf", ".docx", ".html", ".csv"}
     }
-    assert indexable == registered | skip, (
-        f"未登记: {indexable - registered - skip} / 已登记但磁盘上不存在: {registered - indexable}"
+    # 明确声明"不索引"的文件里，只有后缀本身可索引的那部分才需要参与对齐。
+    # 例如 data/README.md 是 .md（可索引但声明跳过）→ 参与；.xlsx 不在 loader
+    # 支持列表里 → 与这一步无关，由 test_registry_accounts_for_every_file_in_data 覆盖。
+    skipped = {
+        entry["path"] for entry in dataset["sources"] if not entry.get("indexed", True)
+    } & indexable
+    assert indexable == registered | skipped, (
+        f"未登记: {indexable - registered - skipped} / "
+        f"已登记但磁盘上不存在: {registered - indexable}"
     )
 
 

@@ -25,6 +25,14 @@
       "reason": "放在 data/ 下但扩展名不在 loader 支持列表，入库时被跳过；显式登记以免自检把它误判成漏登记"
     },
     {
+      "source": "未交名单.xlsx",
+      "path": "未交名单.xlsx",
+      "groups": ["public"],
+      "kind": "not-indexed",
+      "indexed": false,
+      "reason": "Excel 不在 loader 支持列表，未参与索引；私有数据且已加入 .gitignore。若要索引，需先在 loaders.py 补 .xlsx loader"
+    },
+    {
       "source": "产品手册.md",
       "path": "产品手册.md",
       "groups": ["public"],

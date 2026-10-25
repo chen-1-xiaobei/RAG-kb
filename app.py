@@ -16,7 +16,7 @@ from envfix import sanitize_proxy_env  # noqa: E402
 sanitize_proxy_env()
 
 from fastapi import Depends, FastAPI, HTTPException  # noqa: E402
-from fastapi.responses import RedirectResponse, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate
@@ -396,6 +396,14 @@ def upstream_errors(action: str):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # dev 鉴权没有护栏：任何客户端只要带 X-Dev-Groups 就能自称任意权限组。
+    # 这一点必须显眼，否则"照 README 跑起来再部署到内网"就是一次真实越权。
+    if settings.auth_mode != "jwt":
+        logger.warning(
+            "⚠ AUTH_MODE=%s：任何客户端都能通过 X-Dev-Groups 自称任意权限组。"
+            "生产环境务必设置 AUTH_MODE=jwt 并配置 JWT_SECRET。",
+            settings.auth_mode,
+        )
     embeddings.embed_query("预热")
     try:
         rerank_warmup()
@@ -431,11 +439,22 @@ def root():
 
 @app.get("/health")
 def health():
+    """健康检查。
+
+    不可用时返回 **503** 而不是 200——用 200 + `ok:false` 时，负载均衡器和 k8s
+    探针会认为实例健康、继续派流量，等于这个接口白做。响应体保留 `ok` 字段，
+    方便已有的前端/脚本继续按原方式判断。
+    """
     try:
         store = index_manager.get()
-        return {"ok": True, "indexed": True, "index": store.index_metadata}
+        return {"ok": True, "indexed": True, "auth_mode": settings.auth_mode,
+                "index": store.index_metadata}
     except Exception as exc:
-        return {"ok": False, "indexed": INDEX.exists(), "error": str(exc)}
+        return JSONResponse(
+            status_code=503,
+            content={"ok": False, "indexed": INDEX.exists(),
+                     "auth_mode": settings.auth_mode, "error": str(exc)},
+        )
 
 
 @app.delete("/conversations/{conversation_id}")

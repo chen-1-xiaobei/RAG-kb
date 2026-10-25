@@ -14,10 +14,18 @@ claims.db
 *.db-shm
 .cache/
 
+# 本地跑测试时用的临时目录（pytest --basetemp 等），不进仓库
+.tmp/
+
 # 个人求职材料，不随仓库发布
 interview-prep.md
+resume.md
 
 # 本地临时脚本与输出（以下划线开头的草稿文件，不进仓库）
 _*.py
 _*.txt
+
+# 未纳入索引的私有数据：不进公开仓库。
+# 若要真正索引它，需要先在 loaders.py 里加 .xlsx loader，再登记到 evals/dataset.json。
+data/未交名单.xlsx
 
