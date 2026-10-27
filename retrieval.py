@@ -24,6 +24,7 @@ from langchain_huggingface import HuggingFaceEmbeddings  # noqa: E402
 from auth import Principal  # noqa: E402
 from config import settings  # noqa: E402
 from kb_store import JSONVectorStore  # noqa: E402
+import obs  # noqa: E402
 from rerank import rerank  # noqa: E402
 
 ROOT = Path(__file__).parent
@@ -97,8 +98,12 @@ def retrieve_ranked(question: str, top_k: int, principal: Principal):
     coarse_ms = (perf_counter() - started) * 1000
     rerank_started = perf_counter()
     hits = rerank(question, candidates, top_n=top_k, threshold=settings.rerank_threshold)
+    rerank_ms = (perf_counter() - rerank_started) * 1000
+    obs.observe("rag_stage_seconds", coarse_ms / 1000, stage="coarse")
+    obs.observe("rag_stage_seconds", rerank_ms / 1000, stage="rerank")
+    obs.inc("rag_retrieval_hits_total", amount=len(hits))
     logger.info(
         "retrieve top_k=%d candidates=%d hits=%d coarse_ms=%d rerank_ms=%d",
-        top_k, len(candidates), len(hits), coarse_ms, (perf_counter() - rerank_started) * 1000,
+        top_k, len(candidates), len(hits), coarse_ms, rerank_ms,
     )
     return hits

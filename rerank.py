@@ -19,6 +19,7 @@ from langchain_core.documents import Document
 from sentence_transformers import CrossEncoder
 
 from config import settings
+import obs
 
 logger = logging.getLogger("rag-kb")
 
@@ -124,6 +125,10 @@ def rerank(
         logger.info(
             "rerank_cache pairs=%d hits=%d misses=%d", len(model_pairs), cache_hits, len(missing)
         )
+    if cache_hits:
+        obs.inc("rag_rerank_cache_total", amount=cache_hits, result="hit")
+    if missing:
+        obs.inc("rag_rerank_cache_total", amount=len(missing), result="miss")
     scored.sort(key=lambda item: item[1], reverse=True)
     return [(doc, score) for doc, score in scored[:top_n] if score >= threshold]
 

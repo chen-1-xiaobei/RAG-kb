@@ -25,6 +25,7 @@ from langchain_core.messages import ToolMessage
 from langchain_core.tools import tool
 
 from auth import Principal
+import obs
 from claims import (
     ALREADY_SUBMITTED,
     NOT_FOUND,
@@ -595,6 +596,7 @@ def execute_tools(state: dict) -> dict:
             else:
                 text, artifact = result
         except Exception as exc:  # 参数校验失败等：错误文本给模型看，不阻断循环
+            obs.inc("rag_tool_calls_total", tool=call["name"], status="error")
             logger.warning(
                 "tool_failed name=%s ms=%d error=%s",
                 call["name"], (perf_counter() - started) * 1000, exc,
@@ -608,6 +610,7 @@ def execute_tools(state: dict) -> dict:
             "tool_result name=%s chars=%d evidence=%d ms=%d",
             call["name"], len(text), len(artifact), (perf_counter() - started) * 1000,
         )
+        obs.inc("rag_tool_calls_total", tool=call["name"], status="ok")
         outputs.append(ToolMessage(content=text, tool_call_id=call["id"], name=call["name"]))
         if call["name"] == SEARCH_TOOL_NAME:
             hits = merge_hits(hits, artifact)

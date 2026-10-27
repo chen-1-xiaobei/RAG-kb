@@ -15,18 +15,25 @@ from envfix import sanitize_proxy_env  # noqa: E402
 
 sanitize_proxy_env()
 
-from fastapi import Depends, FastAPI, HTTPException  # noqa: E402
-from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
+from fastapi import Depends, FastAPI, HTTPException, Request  # noqa: E402
+from fastapi.responses import (
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_deepseek import ChatDeepSeek
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import MutableHeaders
 
 from agent_flow import AgentState, build_agent_graph, build_evidence
 from auth import Principal, get_principal
 import cassette
+import obs
 from claims import ClaimStore, render
 from clarification import REFUSAL_TEXT, decide
 from config import settings
@@ -55,11 +62,8 @@ from streaming import (
 )
 from tools import DATA, TableRegistry, build_tools, execute_tools
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s.%(msecs)03d %(levelname)s %(name)s: %(message)s",
-    datefmt="%H:%M:%S",
-)
+# 日志格式里带 rid / conv：没有这两个键，并发时十几行日志交错，无法把一次请求串起来
+obs.install_logging()
 logger = logging.getLogger("rag-kb")
 LOG_QUESTION_CHARS = 80  # 日志只记问题前缀：原文可能含敏感信息，够定位即可
 
@@ -384,12 +388,16 @@ def upstream_errors(action: str):
     try:
         yield
     except HTTPException:
+        obs.inc("rag_requests_total", status="error", endpoint=action)
         raise
     except FileNotFoundError as exc:
+        obs.inc("rag_requests_total", status="error", endpoint=action)
         raise HTTPException(503, "index.json 不存在，请先运行 python ingest.py") from exc
     except IndexConfigError as exc:
+        obs.inc("rag_requests_total", status="error", endpoint=action)
         raise HTTPException(503, str(exc)) from exc
     except Exception as exc:
+        obs.inc("rag_requests_total", status="error", endpoint=action)
         logger.exception("%s failed", action)
         raise HTTPException(503, "检索或生成服务暂不可用，请稍后重试") from exc
 
@@ -422,6 +430,37 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Enterprise Knowledge Base RAG", lifespan=lifespan)
 
+
+class RequestContextMiddleware:
+    """为每个请求分配 rid，并把它写进响应头。
+
+    刻意不用 `@app.middleware("http")`：那是 BaseHTTPMiddleware，它会再包一层
+    收发流，对 SSE 这种长连接的缓冲/断开行为有影响。这里直接实现 ASGI 接口，
+    只在 response.start 上补一个头，对响应体零干预。
+    """
+
+    def __init__(self, asgi_app):
+        self.app = asgi_app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request_id = obs.new_request_id()
+        obs.set_request_id(request_id)
+        obs.bind_conversation(None)          # 端点解析出会话后再补
+
+        async def send_with_id(message):
+            if message["type"] == "http.response.start":
+                MutableHeaders(scope=message)["X-Request-Id"] = request_id
+            await send(message)
+
+        await self.app(scope, receive, send_with_id)
+
+
+app.add_middleware(RequestContextMiddleware)
+
 # 单文件前端（static/index.html）由同一个进程托管：
 # 不用额外的 Node 工具链、不用构建、也没有跨域问题。
 STATIC_DIR = ROOT / "static"
@@ -435,6 +474,18 @@ else:  # 静态文件缺失时仍能启动服务，只是没有界面
 def root():
     # 有前端就进界面，没有就回落到 API 文档
     return RedirectResponse("/ui/" if STATIC_DIR.is_dir() else "/docs")
+
+
+@app.get("/metrics")
+def metrics():
+    """Prometheus 文本格式指标。
+
+    只暴露聚合数字，不含问题原文与用户标识，因此不需要鉴权；
+    若部署在不可信网络，仍建议在网络层限制来源。
+    """
+    return PlainTextResponse(
+        obs.render_prometheus(), media_type="text/plain; version=0.0.4; charset=utf-8"
+    )
 
 
 @app.get("/health")
@@ -479,12 +530,17 @@ def ask(req: AskRequest, principal: Principal = Depends(get_principal)):
     started = perf_counter()
     with upstream_errors("ask"):
         conversation = _authorize(req, principal)
+        obs.bind_conversation(conversation.conversation_id)
         response = generate_answer(req.question, retrieve_ranked(req.question, req.top_k, principal),
                                    conversation.conversation_id)
     _persist(conversation, req.question, response)
+    elapsed = perf_counter() - started
+    outcome = "refused" if response.insufficient_context else "ok"
+    obs.inc("rag_requests_total", status=outcome, endpoint="ask")
+    obs.observe("rag_latency_seconds", elapsed, stage="total", endpoint="ask")
     logger.info(
-        "rag_query_done user=%s sources=%s ms=%d",
-        principal.user_id, len(response.sources), (perf_counter() - started) * 1000,
+        "rag_query_done user=%s sources=%s outcome=%s ms=%d",
+        principal.user_id, len(response.sources), outcome, elapsed * 1000,
     )
     return response
 
@@ -500,6 +556,7 @@ def agent_ask(req: AskRequest, principal: Principal = Depends(get_principal)):
     started = perf_counter()
     with upstream_errors("agent_ask"):
         conversation = _authorize(req, principal)
+        obs.bind_conversation(conversation.conversation_id)
         tools = build_tools(
             principal, retrieve_ranked, table_registry, claim_store,
             conversation_id=conversation.conversation_id,
@@ -514,10 +571,20 @@ def agent_ask(req: AskRequest, principal: Principal = Depends(get_principal)):
         )
     response = result["response"]
     _persist(conversation, req.question, response)
+    elapsed = perf_counter() - started
+    if response.pending_clarification:
+        outcome = "clarify"
+    elif response.insufficient_context:
+        outcome = "refused"
+    else:
+        outcome = "ok"
+    obs.inc("rag_requests_total", status=outcome, endpoint="agent")
+    obs.observe("rag_latency_seconds", elapsed, stage="total", endpoint="agent")
+    obs.observe("rag_agent_rounds", result.get("tool_rounds", 0), endpoint="agent")
     logger.info(
-        "agent_query_done user=%s rounds=%s sources=%s clarify=%s ms=%d",
+        "agent_query_done user=%s rounds=%s sources=%s clarify=%s outcome=%s ms=%d",
         principal.user_id, result.get("tool_rounds", 0), len(response.sources),
-        response.pending_clarification, (perf_counter() - started) * 1000,
+        response.pending_clarification, outcome, elapsed * 1000,
     )
     return response
 
@@ -570,6 +637,7 @@ async def _stream_events(question: str, conversation: Conversation, state: dict)
     except Exception:
         # 堆栈只进日志，不下发给客户端
         logger.exception("agent_stream_failed")
+        obs.inc("rag_requests_total", status="error", endpoint="stream")
         yield sse(EVENT_ERROR, {"message": "检索服务暂不可用，请稍后重试"})
         return
 
@@ -587,9 +655,18 @@ async def _stream_events(question: str, conversation: Conversation, state: dict)
             "pending_confirmation": response.pending_confirmation,
         })
         _persist(conversation, question, response)
+        elapsed = perf_counter() - started
+        if response.pending_clarification:
+            outcome = "clarify"
+        elif response.insufficient_context:
+            outcome = "refused"
+        else:
+            outcome = "ok"
+        obs.inc("rag_requests_total", status=outcome, endpoint="stream")
+        obs.observe("rag_latency_seconds", elapsed, stage="total", endpoint="stream")
         logger.info(
-            "agent_stream_done mode=single sources=%s ms=%d",
-            len(response.sources), (perf_counter() - started) * 1000,
+            "agent_stream_done mode=single sources=%s outcome=%s ms=%d",
+            len(response.sources), outcome, elapsed * 1000,
         )
         return
 
@@ -616,9 +693,12 @@ async def _stream_events(question: str, conversation: Conversation, state: dict)
         conversation_id=conversation.conversation_id,
     )
     _persist(conversation, question, response)
+    elapsed = perf_counter() - started
+    obs.inc("rag_requests_total", status="ok", endpoint="stream")
+    obs.observe("rag_latency_seconds", elapsed, stage="total", endpoint="stream")
     logger.info(
         "agent_stream_done mode=stream chars=%d citations=%s ms=%d",
-        len(stream_result.text), stream_result.citations, (perf_counter() - started) * 1000,
+        len(stream_result.text), stream_result.citations, elapsed * 1000,
     )
 
 
@@ -636,6 +716,7 @@ async def agent_ask_stream(req: AskRequest, principal: Principal = Depends(get_p
         principal.user_id, question_for_log(req.question),
     )
     conversation = _authorize(req, principal)
+    obs.bind_conversation(conversation.conversation_id)
     tools = build_tools(
         principal, retrieve_ranked, table_registry, claim_store,
         conversation_id=conversation.conversation_id,

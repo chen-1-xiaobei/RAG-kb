@@ -4,7 +4,7 @@
 [![CI](https://github.com/chen-1-xiaobei/RAG-kb/actions/workflows/ci.yml/badge.svg)](https://github.com/chen-1-xiaobei/RAG-kb/actions/workflows/ci.yml)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-1.0-1C3C3C)](https://langchain-ai.github.io/langgraph/)
-[![Tests](https://img.shields.io/badge/tests-201%20passed-brightgreen)](#测试与评测)
+[![Tests](https://img.shields.io/badge/tests-212%20passed-brightgreen)](#测试与评测)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 > 面向企业内部制度与流程问答的 Agentic RAG 系统。RAG 只是它可调用的工具之一：模型自主决定
@@ -291,6 +291,65 @@ docker compose up --build
 - 权限约定：`data/` 根目录文件 → `group=public`；子目录名为权限组。服务端身份解析后按组**预过滤**，未授权内容不参与 top-k 竞争。
 - **结构化表格数据**：把 `.csv` 放入 `data/`（组权限约定与文档相同），服务启动时载入内存 sqlite（只读），`/agent/ask` 的模型通过 `list_tables`/`query_table` 工具查询——表格与数值查询是向量检索的短板，交给 SQL 补。查询白名单校验 + SELECT-only + sqlite authorizer 三层只读；未授权表与不存在的表返回同一文案（不泄露存在性）。改 CSV 后重启服务生效。
 
+## 可观测性
+
+三件套里目前做了两件：**日志**和**指标**，追踪（trace）还没有。
+
+### 日志：每个请求可串起来
+
+每个请求分配一个 `rid`，解析出会话后再补上 `conv`，两者自动注入每一条日志：
+
+```
+21:12:00.561 INFO rag-kb rid=4b6e89d6f9bc conv=uCSaMeziY_...: retrieve top_k=4 candidates=8 hits=0 coarse_ms=68 rerank_ms=3545
+21:12:00.579 INFO rag-kb rid=4b6e89d6f9bc conv=uCSaMeziY_...: rag_query_done user=obs-demo sources=0 outcome=refused ms=3639
+```
+
+- `rid` 同时写进响应头 `X-Request-Id`，客户端报障时可以直接给出这个值
+- 过滤器装在 **handler** 上而不是 logger 上，因此第三方库（httpx 等）的日志同样带得上
+- 实现用纯 ASGI 中间件而不是 `BaseHTTPMiddleware`：后者会再包一层收发，对 SSE 长连接的缓冲/断开行为有影响
+
+排查时 `grep rid=4b6e89d6f9bc` 就是一次完整轨迹。
+
+### 指标：`/metrics`（Prometheus 文本格式）
+
+| 指标 | 类型 | 说明 |
+| --- | --- | --- |
+| `rag_requests_total{endpoint,status}` | counter | `status` 取 `ok` / `refused` / `clarify` / `error` |
+| `rag_latency_seconds{endpoint,stage}` | summary | 端到端耗时 |
+| `rag_stage_seconds{stage}` | summary | `coarse` / `rerank` 分段耗时 |
+| `rag_tool_calls_total{tool,status}` | counter | 工具调用与失败 |
+| `rag_rerank_cache_total{result}` | counter | 精排缓存命中/未命中 |
+| `rag_agent_rounds{endpoint}` | summary | agent 轮数分布 |
+| `rag_retrieval_hits_total` | counter | 命中条数累计 |
+
+实际输出片段：
+
+```
+rag_requests_total{endpoint="agent",status="refused"} 1
+rag_requests_total{endpoint="ask",status="refused"} 1
+rag_stage_seconds{stage="coarse",quantile="0.5"} 0.0682
+rag_stage_seconds{stage="rerank",quantile="0.5"} 3.5457
+rag_rerank_cache_total{result="miss"} 8
+```
+
+**这张表直接回答了"慢在哪"**：粗排 68ms、精排 3546ms，精排占 98%——不用翻日志。
+
+抓取配置：
+
+```yaml
+scrape_configs:
+  - job_name: rag-kb
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["127.0.0.1:8000"]
+```
+
+### 故意的取舍
+
+- **不引入 `prometheus_client`**：只有七个指标，不值得多一个依赖；文本格式本身很简单
+- **分位数是近似的**：从固定长度（512）滑动窗口算出来，不是真直方图。单实例低频够用，高并发会有偏差——真要上规模应换成真直方图
+- **`/metrics` 不做鉴权**：只暴露聚合数字，不含问题原文与用户标识；若部署在不可信网络，应在网络层限制来源
+
 ## 面试可讲的工程点
 
 - **两段式检索**：bi-encoder 向量粗排（高召回，O(N) 点积毫秒级）→ cross-encoder reranker 精排（高精度，query 与文档全注意力交互，仅跑在少量候选上）；精排分数为原始 logit（0≈中性，阈值 0.05 由评测集标定——sigmoid 会把中性分数压缩到 0.5 附近丢失判别度），低于阈值直接丢弃并拒答。
@@ -332,7 +391,7 @@ python evaluate.py --update-baseline  # 人工确认指标后刷新 evals/baseli
 
 | 任务 | 内容 | 特点 |
 | --- | --- | --- |
-| `test` | `python -m pytest -q`（201 个离线单测） | 不下载模型、不调用 LLM，几十秒出结果 |
+| `test` | `python -m pytest -q`（212 个离线单测） | 不下载模型、不调用 LLM，几十秒出结果 |
 | `eval` | `python ingest.py` + `python evaluate.py` | 真实跑粗排 + 精排，**严格校验 `evals/baseline.json`**；不达标或相对基线回退即失败 |
 
 分工的理由：单测是"代码逻辑没坏"的快速反馈，评测是"检索质量没退化"的慢速把关，两者失败时的排查方向完全不同。
@@ -418,6 +477,8 @@ $env:LLM_CASSETTE_MODE="replay"      # 不设 MODE 时默认就是 replay
 - **知识库规模上限**：`JSONVectorStore` 每次查询做全量点积，面向万级 chunk 以内；再往上需要 FAISS/pgvector 之类带索引的实现。
 - **纯 CPU 精排约 4.5s/次**：这是 568M cross-encoder 的物理成本。要降只能量化或换更小的 reranker，且**必须重新标定阈值**（换模型后旧阈值不再有效）。
 - **评测集偏小**：39 条用例、5 个来源，指标已饱和。详见上方「实测指标」中的说明。
+- **没有分布式追踪**：日志有 `rid`/`conv` 可以串起一次请求，但跨服务（deepseek API、未来的外部工具）没有 trace 传播，也没有接入 OpenTelemetry。定位"慢在哪一跳"要看日志时间戳，不能看调用链瀑布图。
+- **指标是单实例内存态**：进程重启即清零，多实例部署时各自独立、无法聚合；延迟分位数来自 512 长度的滑动窗口，是近似值而非真直方图。
 - **CI 尚未覆盖 Docker 构建**：`Dockerfile` 与 compose 编排已就绪，但没有纳入流水线（构建镜像要下载 2GB+ 权重，不适合放在每次 PR 上）。若要加，建议只在 `main` 的 tag 上触发。
 
 ## 许可
