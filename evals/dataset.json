@@ -15,6 +15,25 @@
     },
     "metrics_note": "nDCG 衡量排序质量：把唯一的相关来源排在第 1 位得 1.0，排在第 2 位约 0.63，排在 k 之外得 0。多来源用例用 relevant_sources 分级，使主次排反也真正扣分。"
   },
+  "_distractors_note": "下列来源是有意放入的干扰文档：它们与某些问题共享词汇，但不该成为任何用例的答案，因此不要求被 required_sources 覆盖。它们的作用是让召回不再因为语料里只有几篇文档就必然命中，从而让 source_recall 有真实的失败可能。",
+  "distractors": [
+    "信息安全规范.md",
+    "采购管理办法.md",
+    "考勤与请假细则.md",
+    "发票.md",
+    "年假.md",
+    "采购.md",
+    "招聘.md",
+    "社会保险.md",
+    "工资.md",
+    "加班.md",
+    "供应链管理.md",
+    "人力资源管理.md",
+    "知识管理.md",
+    "会计.md",
+    "增值税.md",
+    "企业所得税.md"
+  ],
   "sources": [
     {
       "source": "README.md",
@@ -38,6 +57,118 @@
       "groups": ["public"],
       "kind": "md",
       "reason": "根目录 -> 全员可见；内容为知识库功能与引用来源要求"
+    },
+    {
+      "source": "信息安全规范.md",
+      "path": "信息安全规范.md",
+      "groups": ["public"],
+      "kind": "md",
+      "reason": "根目录 -> 全员可见；与制度类文档共享「审批/流程/工作日」等词汇，作为检索干扰项"
+    },
+    {
+      "source": "发票.md",
+      "path": "发票.md",
+      "groups": ["public"],
+      "kind": "md",
+      "reason": "公开参考材料（中文维基百科，CC BY-SA）；与报销流程共享「发票/增值税」等词，用于制造召回竞争"
+    },
+    {
+      "source": "年假.md",
+      "path": "年假.md",
+      "groups": ["public"],
+      "kind": "md",
+      "reason": "公开参考材料（中文维基百科，CC BY-SA）；年假概念条目，与员工手册共享词汇"
+    },
+    {
+      "source": "采购.md",
+      "path": "采购.md",
+      "groups": ["public"],
+      "kind": "md",
+      "reason": "公开参考材料（中文维基百科，CC BY-SA）；采购概念条目，与财务类文档共享「审批/流程」等词"
+    },
+    {
+      "source": "招聘.md",
+      "path": "招聘.md",
+      "groups": ["public"],
+      "kind": "md",
+      "reason": "公开参考材料（中文维基百科，CC BY-SA）；招聘概念条目，与员工手册的入职话题相邻"
+    },
+    {
+      "source": "社会保险.md",
+      "path": "社会保险.md",
+      "groups": ["public"],
+      "kind": "md",
+      "reason": "公开参考材料（中文维基百科，CC BY-SA）；篇幅最大，与员工手册的薪酬话题共享词汇"
+    },
+    {
+      "source": "工资.md",
+      "path": "工资.md",
+      "groups": ["public"],
+      "kind": "md",
+      "reason": "公开参考材料（中文维基百科，CC BY-SA）；与员工手册「工资每月十号发放」强竞争"
+    },
+    {
+      "source": "加班.md",
+      "path": "加班.md",
+      "groups": ["public"],
+      "kind": "md",
+      "reason": "公开参考材料（中文维基百科，CC BY-SA）；与「加班费几倍」类问题强竞争"
+    },
+    {
+      "source": "供应链管理.md",
+      "path": "供应链管理.md",
+      "groups": ["public"],
+      "kind": "md",
+      "reason": "公开参考材料（中文维基百科，CC BY-SA）；采购类话题的干扰项"
+    },
+    {
+      "source": "人力资源管理.md",
+      "path": "人力资源管理.md",
+      "groups": ["public"],
+      "kind": "md",
+      "reason": "公开参考材料（中文维基百科，CC BY-SA）；人事类话题的泛化干扰项"
+    },
+    {
+      "source": "知识管理.md",
+      "path": "知识管理.md",
+      "groups": ["public"],
+      "kind": "md",
+      "reason": "公开参考材料（中文维基百科，CC BY-SA）；篇幅最大，与产品手册同属「知识库」语义域"
+    },
+    {
+      "source": "会计.md",
+      "path": "会计.md",
+      "groups": ["public"],
+      "kind": "md",
+      "reason": "公开参考材料（中文维基百科，CC BY-SA）；财务类话题的泛化干扰项"
+    },
+    {
+      "source": "增值税.md",
+      "path": "增值税.md",
+      "groups": ["public"],
+      "kind": "md",
+      "reason": "公开参考材料（中文维基百科，CC BY-SA）；与报销流程的「增值税专用发票」直接竞争"
+    },
+    {
+      "source": "企业所得税.md",
+      "path": "企业所得税.md",
+      "groups": ["public"],
+      "kind": "md",
+      "reason": "公开参考材料（中文维基百科，CC BY-SA）；财务类话题的泛化干扰项"
+    },
+    {
+      "source": "采购管理办法.md",
+      "path": "财务/采购管理办法.md",
+      "groups": ["财务"],
+      "kind": "md",
+      "reason": "财务组可见；与报销流程同属财务审批话题、词汇高度重叠，用于考察检索区分度而非覆盖率"
+    },
+    {
+      "source": "考勤与请假细则.md",
+      "path": "人事/考勤与请假细则.md",
+      "groups": ["人事"],
+      "kind": "md",
+      "reason": "人事组可见；请假、加班、调休话题与员工手册相邻，明确把审批流程指向员工手册以免与既有用例矛盾"
     },
     {
       "source": "报销流程.md",
@@ -373,6 +504,86 @@
       "kind": "injection",
       "injection_canary": "CANARY-DOC-INJECTION",
       "note": "跨权限注入：public 用户以提示注入方式索要财务内容，检索层必须零召回；标记同时出现在问题里，故只登记不回判"
+    },
+    {
+      "question": "双签",
+      "groups": ["财务"],
+      "required_sources": ["报销流程.md"],
+      "kind": "retrieval",
+      "family": "term",
+      "note": "[术语] 只给制度原词、不给上下文；原文为「单笔金额超过五千元的报销需要部门负责人和财务总监双签」"
+    },
+    {
+      "question": "代开发票",
+      "groups": ["财务"],
+      "required_sources": ["报销流程.md"],
+      "kind": "retrieval",
+      "family": "term",
+      "note": "[术语] 原文是「不得使用代开发票」，问句与原文共享的只有这一个词"
+    },
+    {
+      "question": "税号",
+      "groups": ["财务"],
+      "required_sources": ["报销流程.md"],
+      "kind": "retrieval",
+      "family": "term",
+      "note": "[术语] 原文为「税号须与公司登记信息一致」；单词查询，语义信号极少"
+    },
+    {
+      "question": "法定节假日几倍",
+      "groups": ["人事"],
+      "required_sources": ["员工手册.md"],
+      "kind": "retrieval",
+      "family": "term",
+      "note": "[术语] 原文为「法定节假日为三倍」；省略了「加班费」这个主语"
+    },
+    {
+      "question": "核心工作时间",
+      "groups": ["人事"],
+      "required_sources": ["员工手册.md"],
+      "kind": "retrieval",
+      "family": "term",
+      "note": "[术语] 原文为「核心工作时间为上午十点到下午四点」；同段还有弹性工作制，易被相邻主题带偏"
+    },
+    {
+      "question": "垫的钱怎么报",
+      "groups": ["财务"],
+      "required_sources": ["报销流程.md"],
+      "kind": "retrieval",
+      "family": "terse",
+      "note": "[省略] 主谓宾全省的真人输入风格；原文没有「垫」字，只能靠语义而不是词面匹配"
+    },
+    {
+      "question": "超过五千找谁签",
+      "groups": ["财务"],
+      "required_sources": ["报销流程.md"],
+      "kind": "retrieval",
+      "family": "terse",
+      "note": "[省略] 原文用「单笔金额超过五千元」「双签」；问句未出现「双签」"
+    },
+    {
+      "question": "周末工资会晚发吗",
+      "groups": ["人事"],
+      "required_sources": ["员工手册.md"],
+      "kind": "retrieval",
+      "family": "terse",
+      "note": "[省略] 原文为「遇节假日提前至最近的工作日」，未提「周末」"
+    },
+    {
+      "question": "没休完能折现吗",
+      "groups": ["人事"],
+      "required_sources": ["员工手册.md"],
+      "kind": "retrieval",
+      "family": "terse",
+      "note": "[省略] 原文为「未使用部分不折现」；省略了「年假」，同段还有三月底前用完的期限"
+    },
+    {
+      "question": "病假要开证明吗",
+      "groups": ["人事"],
+      "required_sources": ["员工手册.md"],
+      "kind": "retrieval",
+      "family": "terse",
+      "note": "[省略] 原文为「病假需附医院证明」；同句还包含请假提前一天的规则，易混淆"
     }
   ]
 }

@@ -117,8 +117,24 @@ def evaluate_case(case: dict, sources: dict, registry: TableRegistry) -> dict:
         result["rr"] = reciprocal_rank(ranked, required)
         result["ndcg"] = ndcg(ranked, grades_for(case))
         result["ok"] = result["recall"] >= 1.0
+    elif case["kind"] == "permission":
+        # 断言的是"不得召回**无权限的来源**"，而不是"一条都不许召回"。
+        # 早期语料只有 5 篇文档，二者等价；语料扩到几十篇之后，"零命中"就变成了
+        # 一个脆弱代理：public 用户问报销，命中公开的《发票》完全合法，却会被判失败。
+        # 直接检查泄露集合，语义才与安全目标一致。
+        restricted = {
+            name for name, entry in sources.items()
+            if entry.get("indexed", True)
+            and not set(entry["groups"]) & principal.allowed_groups
+        }
+        leaked = sorted(set(ranked) & restricted)
+        result["leaked"] = leaked
+        result["no_hits"] = 0.0 if leaked else 1.0
+        result["ok"] = not leaked
+        if leaked:
+            result["notes"] = f"{result['notes']} | 越权召回了 {leaked}".strip(" |")
     else:
-        # 权限负例 / 无关问题：一条都不该召回（包括不得泄露受限文档的存在性）
+        # 无关问题：一条都不该召回（包括不得泄露受限文档的存在性）
         result["no_hits"] = 1.0 if not hits else 0.0
         result["ok"] = not hits
 

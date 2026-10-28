@@ -212,10 +212,29 @@ def test_no_duplicate_question_and_groups(cases):
 
 
 def test_every_indexed_source_is_covered_by_some_case(dataset, cases):
-    """每个被索引的来源至少被一条用例期望召回，否则该文档的召回/权限质量无人验证。"""
+    """每个**答案来源**至少被一条用例期望召回，否则该文档的召回/权限质量无人验证。
+
+    干扰文档是例外：它们与某些问题共享词汇但不该成为答案，因此显式登记在
+    顶层 `distractors` 里，不要求被覆盖。这条断言原本对"所有被索引文档"生效——
+    那在语料只有 5 篇时成立，加入干扰项后必须按角色区分，否则会逼着人给每篇
+    干扰文档编一道假题。
+    """
+    declared = set(dataset.get("distractors", []))
+    indexed = {entry["source"] for entry in indexed_entries(dataset)}
+
+    # 干扰项必须真的在索引里，否则它压根没参与竞争，起不到作用
+    assert declared <= indexed, f"声明的干扰项没有被索引: {declared - indexed}"
+
     covered = {source for case in cases for source in case["required_sources"]}
-    missing = {entry["source"] for entry in indexed_entries(dataset)} - covered
+    missing = (indexed - declared) - covered
     assert not missing, f"以下来源没有任何用例覆盖: {missing}"
+
+
+def test_distractors_are_not_used_as_required_answers(dataset, cases):
+    """干扰项如果被某条用例当作必答来源，说明它其实是答案文档，角色声明错了。"""
+    declared = set(dataset.get("distractors", []))
+    covered = {source for case in cases for source in case["required_sources"]}
+    assert not declared & covered, f"干扰项被当作必答来源: {declared & covered}"
 
 
 def test_evaluate_does_not_depend_on_llm_module():

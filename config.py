@@ -20,8 +20,17 @@ class Settings:
     # 精排门槛（cross-encoder 原始 logit；0 为中性/无关，评测集标定值见 rerank.py 说明）
     rerank_threshold: float = float(os.getenv("RERANK_THRESHOLD", "0.05"))
     # 粗排召回候选数 = top_k x 倍数（封顶 16，控制 CPU 精排耗时）
-    # 精排是整条链路的耗时大头，倍数越大线性越慢；2 倍经评测集验证 recall 不降
+    # 精排是整条链路的耗时大头，倍数越大线性越慢。
+    # 实测（126 chunk 语料）：倍数 2（8 候选）source_recall 100%；
+    # 降到 1（4 候选）时「没休完能折现吗」被同领域干扰文档挤出候选集，掉到 97.4%——
+    # 精排只能重排候选、不能凭空召回，所以候选数是**召回上限**，不要轻易调小。
     rerank_candidate_factor: int = int(os.getenv("RERANK_CANDIDATE_FACTOR", "2"))
+    # 混合检索：向量召回 + BM25 关键词召回，RRF 融合（实现见 hybrid.py）。
+    # 实测结论（126 chunk、49 条用例）：开启与关闭的 source_recall / nDCG 完全相同（都是 100%）；
+    # 代价是粗排 +1.25ms（21.4 -> 22.6ms，仅为精排 3.5s 的 0.04%）。
+    # **没有可测量的收益，因此默认关闭**，代码保留为开关：
+    # 语料显著变大（数千 chunk）或换更弱的精排模型时，值得用同一套评测重测一次。
+    hybrid_enabled: bool = os.getenv("HYBRID_ENABLED", "0") not in {"0", "false", "False"}
     # 精排批大小：实测本机（i5-13420H 纯 CPU）批量越大反而越慢——每对耗时
     # batch=1/2 约 0.6s、8 约 0.85s、16 约 1.4s；故默认小批量。
     # 换硬件/换模型后建议重测（方法见 README「精排延迟」段）。

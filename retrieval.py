@@ -23,6 +23,7 @@ from langchain_huggingface import HuggingFaceEmbeddings  # noqa: E402
 
 from auth import Principal  # noqa: E402
 from config import settings  # noqa: E402
+from hybrid import bm25_search, rrf_fuse  # noqa: E402
 from kb_store import JSONVectorStore  # noqa: E402
 import obs  # noqa: E402
 from rerank import rerank  # noqa: E402
@@ -78,12 +79,30 @@ index_manager = IndexManager(INDEX)
 
 
 def retrieve(question: str, top_k: int, principal: Principal):
-    return index_manager.get().similarity_search_with_relevance_scores(
-        question,
-        k=top_k,
-        score_threshold=settings.score_threshold,
-        filter=lambda record: record.get("group") in principal.allowed_groups,
+    """粗排召回。
+
+    默认走**混合检索**：向量召回 + BM25 关键词召回，用 RRF 融合。
+    纯向量的弱点是精确词面（「折现」「双签」这类制度用语容易被泛化到相邻话题），
+    BM25 对此敏感，两者互补。详见 hybrid.py 的说明与实测数据。
+    """
+    store = index_manager.get()
+
+    def allowed(record) -> bool:
+        return record.get("group") in principal.allowed_groups
+
+    dense = store.similarity_search_with_relevance_scores(
+        question, k=top_k, score_threshold=settings.score_threshold, filter=allowed,
     )
+    if not settings.hybrid_enabled:
+        return dense
+
+    sparse = bm25_search(store, question, k=top_k, filter_fn=allowed)
+    if not sparse:
+        return dense
+
+    fused = rrf_fuse([dense, sparse], top_k)
+    logger.info("retrieve_fuse dense=%d bm25=%d fused=%d", len(dense), len(sparse), len(fused))
+    return fused
 
 
 def candidate_k(top_k: int) -> int:
