@@ -1,0 +1,127 @@
+{
+  "schema_version": 2,
+  "_doc": {
+    "purpose": "答案层评测：只评「检索之后」的那一段——引用是否落在允许的来源上、该答的答没答、该拒的拒没拒、答案里有没有出现错误断言。检索层的指标见 evaluate.py，这里不重复。",
+    "how_to_run": "python evaluate_answers.py（读 evals/answers.fixture.json，离线、不需要密钥）；录制草稿：python evaluate_answers.py --record（需要 DEEPSEEK_API_KEY）",
+    "fields": {
+      "cases[].expect": "answer 应当作答 | refuse 应当拒答",
+      "cases[].required_sources": "被引用的来源必须落在这个集合内；空数组表示不应有引用",
+      "cases[].must_contain": "答案中必须出现的事实串（通常取文档里的关键数值/时限）",
+      "cases[].must_not_contain": "答案中不得出现的**错误断言**（整句，不是孤立词）",
+      "cases[].note": "该期望的依据（文档原句），避免出题超出知识库能力"
+    },
+    "limitations": "must_contain / must_not_contain 是字符串包含判定，不是语义蕴含：它抓得住「数值写错」「答案缺关键事实」，但抓不住「用正确词汇说错话」。**must_not_contain 必须写成错误断言而非孤立词**——第一版把「三倍」列为 a06 的禁词，结果模型回答「休息日两倍（法定节假日三倍）」被判错，而那句话完全正确。这是字符串断言最常见的假阳性：同一段文档里常同时存在正确与错误的数字，孤立词无法区分它们在讲哪一档。"
+  },
+  "cases": [
+    {
+      "id": "a01",
+      "question": "报销单要在费用发生后多久之内提交？",
+      "groups": ["财务"],
+      "expect": "answer",
+      "required_sources": ["报销流程.md"],
+      "must_contain": ["三十天"],
+      "must_not_contain": ["费用发生后六十天内提交", "费用发生后十五天内提交"],
+      "note": "原文：员工在费用发生后三十天内，在 OA 系统填写报销单"
+    },
+    {
+      "id": "a02",
+      "question": "纸质发票要几个工作日内交到财务部？",
+      "groups": ["财务"],
+      "expect": "answer",
+      "required_sources": ["报销流程.md"],
+      "must_contain": ["五个工作日"],
+      "must_not_contain": ["纸质发票需在十个工作日内", "纸质发票需在一个工作日内"],
+      "note": "原文：纸质发票需在五个工作日内交至财务部归档。注意同一文档另有「三个工作日内打款」，因此禁词不能写成孤立的「三个工作日」"
+    },
+    {
+      "id": "a03",
+      "question": "多大的金额需要财务总监签字？",
+      "groups": ["财务"],
+      "expect": "answer",
+      "required_sources": ["报销流程.md"],
+      "must_contain": ["五千"],
+      "must_not_contain": ["超过一万元的报销需要财务总监", "超过两万元的报销需要财务总监"],
+      "note": "原文：单笔金额超过五千元的报销需要部门负责人和财务总监双签。采购办法里有「两万元」门槛，孤立词会误伤"
+    },
+    {
+      "id": "a04",
+      "question": "试用期是几个月？",
+      "groups": ["人事"],
+      "expect": "answer",
+      "required_sources": ["员工手册.md"],
+      "must_contain": ["三个月"],
+      "must_not_contain": ["试用期为六个月", "试用期为一年"],
+      "note": "原文：试用期统一为三个月"
+    },
+    {
+      "id": "a05",
+      "question": "工资每个月几号发？",
+      "groups": ["人事"],
+      "expect": "answer",
+      "required_sources": ["员工手册.md"],
+      "must_contain": ["十号"],
+      "must_not_contain": ["每月十五号发放", "每月底发放"],
+      "note": "原文：工资于每月十号发放"
+    },
+    {
+      "id": "a06",
+      "question": "休息日加班是几倍工资？",
+      "groups": ["人事"],
+      "expect": "answer",
+      "required_sources": ["员工手册.md"],
+      "must_contain": ["两倍"],
+      "must_not_contain": ["休息日加班为三倍", "休息日加班为一点五倍"],
+      "note": "原文：休息日加班为两倍（工作日延时一点五倍、法定节假日三倍）。禁词必须是整句——正确回答会同时列出这三档"
+    },
+    {
+      "id": "a07",
+      "question": "年假没休完能换成钱吗？",
+      "groups": ["人事"],
+      "expect": "answer",
+      "required_sources": ["员工手册.md"],
+      "must_contain": ["不折现"],
+      "must_not_contain": ["可以折算为工资", "按三倍工资支付"],
+      "note": "原文：未使用部分不折现"
+    },
+    {
+      "id": "a08",
+      "question": "报销的钱什么时候能打到卡上？",
+      "groups": ["财务"],
+      "expect": "answer",
+      "required_sources": ["报销流程.md"],
+      "must_contain": ["三个工作日"],
+      "must_not_contain": ["当天到账", "七个工作日内到账"],
+      "note": "原文：审核通过后三个工作日内打款至员工工资卡"
+    },
+    {
+      "id": "r01",
+      "question": "公司的年会在哪里办？",
+      "groups": ["财务", "人事"],
+      "expect": "refuse",
+      "required_sources": [],
+      "must_contain": [],
+      "must_not_contain": [],
+      "note": "知识库无任何相关内容：必须在调用 LLM 之前拒答"
+    },
+    {
+      "id": "r02",
+      "question": "报销单的审批流程是什么？",
+      "groups": [],
+      "expect": "refuse",
+      "required_sources": [],
+      "must_contain": [],
+      "must_not_contain": ["由直属主管审批", "流转至财务部审核"],
+      "note": "无任何权限组：检索零召回，必须拒答且不得凭内部知识作答"
+    },
+    {
+      "id": "r03",
+      "question": "公司给员工买什么商业保险？",
+      "groups": ["人事"],
+      "expect": "refuse",
+      "required_sources": [],
+      "must_contain": [],
+      "must_not_contain": ["补充医疗保险", "意外伤害保险"],
+      "note": "员工手册只提到社保登记，没有商业保险内容；应拒答而不是补全"
+    }
+  ]
+}

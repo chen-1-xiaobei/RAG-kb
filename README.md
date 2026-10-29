@@ -4,7 +4,7 @@
 [![CI](https://github.com/chen-1-xiaobei/RAG-kb/actions/workflows/ci.yml/badge.svg)](https://github.com/chen-1-xiaobei/RAG-kb/actions/workflows/ci.yml)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-1.0-1C3C3C)](https://langchain-ai.github.io/langgraph/)
-[![Tests](https://img.shields.io/badge/tests-224%20passed-brightgreen)](#测试与评测)
+[![Tests](https://img.shields.io/badge/tests-234%20passed-brightgreen)](#测试与评测)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 > 面向企业内部制度与流程问答的 Agentic RAG 系统。RAG 只是它可调用的工具之一：模型自主决定
@@ -391,12 +391,40 @@ python evaluate.py --update-baseline  # 人工确认指标后刷新 evals/baseli
 
 | 任务 | 内容 | 特点 |
 | --- | --- | --- |
-| `test` | `python -m pytest -q`（224 个离线单测） | 不下载模型、不调用 LLM，几十秒出结果 |
-| `eval` | `python ingest.py` + `python evaluate.py` | 真实跑粗排 + 精排，**严格校验 `evals/baseline.json`**；不达标或相对基线回退即失败 |
+| `test` | `python -m pytest -q`（234 个离线单测） | 不下载模型、不调用 LLM，几十秒出结果 |
+| `eval` | `python ingest.py` + `python evaluate.py` + `python evaluate_answers.py` | 真实跑粗排 + 精排，**严格校验 `evals/baseline.json`**；不达标或相对基线回退即失败 |
 
 分工的理由：单测是"代码逻辑没坏"的快速反馈，评测是"检索质量没退化"的慢速把关，两者失败时的排查方向完全不同。
 `eval` 需要 reranker 权重（约 2GB），因此缓存 `~/.cache/huggingface`；缓存命中的一次完整运行约 5 分钟。
 两个任务都**不调用 LLM**，所以 CI 里不需要任何真实密钥——这也是把评测设计成纯检索评测的附带收益之一。
+
+### 答案层评测（`evaluate_answers.py`）
+
+检索评测只回答"正确来源有没有排上来"，但用户看到的是答案。检索对了，答案仍可能：引用到不该引用的来源、该拒答时硬答、把数值写错。
+
+做法：**录制一次模型草稿，之后离线重放**，且重放时调用的是 `app.finalize_answer`——也就是生产代码里负责"引用校验 + 证据不足判定"的同一段逻辑，而不是评测里另写一遍。
+
+```
+python evaluate_answers.py --record   # 用真实模型录一次（需要密钥），产物提交进仓库
+python evaluate_answers.py            # 之后离线重放，CI 跑这个
+```
+
+11 条用例（8 条应作答 + 3 条应拒答），五个指标：
+
+| 指标 | 含义 | 门槛 |
+| --- | --- | --- |
+| `behavior_accuracy` | 该答的答了、该拒的拒了 | 100% |
+| `answer_recall` | 应作答用例中实际作答的比例 | — |
+| `refusal_accuracy` | 应拒答用例中正确拒答的比例 | 100% |
+| `citation_precision` | 被引用的来源**全部**落在允许集合内 | 100% |
+| `fact_presence` | 答案含期望事实、且不含错误断言 | 90% |
+| `fully_correct` | 三项同时成立 | — |
+
+实测全部 100%。其中 3 条拒答用例**不经过 LLM**：零证据时 `finalize_answer` 在调用模型之前就返回拒答——这正是"拒答是控制流而不是提示词"这句话的自动化验证。
+
+**一个必须写下来的教训**：`must_not_contain` 必须写成**错误断言整句**，不能写孤立词。第一版把「三倍」列为 a06 的禁词，而正确回答是"休息日加班为两倍（法定节假日为三倍）"——模型答对了却被判错。同一段文档里正确与错误的数字常常并存，孤立词无法区分它们在讲哪一档。这类假阳性是字符串断言最常见的坑，`tests/test_answer_eval.py` 里加了一条断言强制禁词长度，防止以后又写回孤立词。
+
+**仍有的边界**：`must_contain` / `must_not_contain` 是字符串包含判定，不是语义蕴含。它抓得住"数值写错""答案缺关键事实"，抓不住"用正确词汇说错话"。后者需要人工或模型判官，目前靠人工抽查覆盖。
 
 > 注意 `eval` 任务不是"跑个脚本看看"：它会把 `evaluate.py` 的退出码作为门禁，因此
 > MMR/nDCG 掉分、权限负例漏放、注入标记出现、表格工具结果不符，都会让 PR 变红。

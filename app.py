@@ -191,17 +191,19 @@ def format_docs(docs) -> str:
     )
 
 
-def generate_answer(question: str, hits, conversation_id: str) -> AskResponse:
+def finalize_answer(question: str, hits, draft, conversation_id: str) -> AskResponse:
+    """把模型草稿收敛成对外响应：引用校验 + 证据不足判定。
+
+    刻意与 `generate_answer` 拆开：**答案层评测要复用这一段生产逻辑**，
+    而不是在评测里另写一遍"我认为应该怎么判"。拆开之后评测可以喂入
+    录制好的草稿（离线、不需要密钥、结果确定），测的仍是同一段代码。
+
+    draft 只需具备 `answer` / `citations` / `insufficient_context` 三个属性。
+    """
     if not hits:
         return AskResponse(answer=REFUSAL_TEXT, sources=[],
                            insufficient_context=True, conversation_id=conversation_id)
-    docs = [doc for doc, _ in hits]
-    started = perf_counter()
-    draft = get_answer_chain().invoke({"context": format_docs(docs), "question": question})
-    logger.info(
-        "answer_generate hits=%d citations=%s insufficient=%s ms=%d",
-        len(hits), draft.citations, draft.insufficient_context, (perf_counter() - started) * 1000,
-    )
+
     valid = sorted({n for n in draft.citations if 1 <= n <= len(hits)})
     sources = []
     for citation in valid:
@@ -220,6 +222,19 @@ def generate_answer(question: str, hits, conversation_id: str) -> AskResponse:
     answer = draft.answer if valid or draft.insufficient_context else REFUSAL_TEXT
     return AskResponse(answer=answer, sources=sources, insufficient_context=insufficient,
                        conversation_id=conversation_id)
+
+
+def generate_answer(question: str, hits, conversation_id: str) -> AskResponse:
+    if not hits:
+        return finalize_answer(question, hits, None, conversation_id)
+    docs = [doc for doc, _ in hits]
+    started = perf_counter()
+    draft = get_answer_chain().invoke({"context": format_docs(docs), "question": question})
+    logger.info(
+        "answer_generate hits=%d citations=%s insufficient=%s ms=%d",
+        len(hits), draft.citations, draft.insufficient_context, (perf_counter() - started) * 1000,
+    )
+    return finalize_answer(question, hits, draft, conversation_id)
 
 
 def _agent_agent(state: AgentState) -> dict:

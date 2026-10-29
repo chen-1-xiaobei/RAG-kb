@@ -83,6 +83,14 @@ jobs:
         env:
           PYTHONUTF8: "1"
         run: python evaluate.py 2>&1 | tee eval-report.txt
+      # 答案层评测：读 evals/answers.fixture.json 里录制好的模型草稿，
+      # 复用 app.finalize_answer 的真实判定 —— 因此**不需要 API 密钥**也不联网。
+      # 它补的是检索评测测不到的那一段：引用是否越界、该拒答时拒没拒、
+      # 答案里有没有出现错误断言。
+      - name: 运行答案层评测
+        env:
+          PYTHONUTF8: "1"
+        run: python evaluate_answers.py 2>&1 | tee -a eval-report.txt
       # 失败时也要留下报告，否则只能翻日志
       - name: 上传评测报告
         if: always()

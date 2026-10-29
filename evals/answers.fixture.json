@@ -1,0 +1,93 @@
+{
+  "note": "答案层评测固件。由 evaluate_answers.py --record 生成；内容是真实模型的草稿（answer / citations / insufficient_context），评测时喂给 app.finalize_answer，因此不需要密钥也不联网。",
+  "drafts": [
+    {
+      "id": "a01",
+      "question": "报销单要在费用发生后多久之内提交？",
+      "draft": {
+        "answer": "根据资料，员工应在费用发生后三十天内在 OA 系统填写报销单，并上传发票原件照片。[1]",
+        "citations": [
+          1
+        ],
+        "insufficient_context": false
+      }
+    },
+    {
+      "id": "a02",
+      "question": "纸质发票要几个工作日内交到财务部？",
+      "draft": {
+        "answer": "纸质发票需在五个工作日内交至财务部归档。",
+        "citations": [
+          1
+        ],
+        "insufficient_context": false
+      }
+    },
+    {
+      "id": "a03",
+      "question": "多大的金额需要财务总监签字？",
+      "draft": {
+        "answer": "根据资料，单笔金额超过五千元的报销需要部门负责人和财务总监双签，即需要财务总监签字。[1]",
+        "citations": [
+          1
+        ],
+        "insufficient_context": false
+      }
+    },
+    {
+      "id": "a04",
+      "question": "试用期是几个月？",
+      "draft": {
+        "answer": "根据员工手册，试用期统一为三个月，试用期内由直属主管每月进行一次考核评估。[1]",
+        "citations": [
+          1
+        ],
+        "insufficient_context": false
+      }
+    },
+    {
+      "id": "a05",
+      "question": "工资每个月几号发？",
+      "draft": {
+        "answer": "根据员工手册，工资于每月十号发放，遇节假日提前至最近的工作日；工资条在 OA 系统内查看，不提供纸质版本。[1]",
+        "citations": [
+          1
+        ],
+        "insufficient_context": false
+      }
+    },
+    {
+      "id": "a06",
+      "question": "休息日加班是几倍工资？",
+      "draft": {
+        "answer": "根据员工手册，加班费按劳动法标准计算：休息日加班为两倍工资（工作日延时加班为基本工资的1.5倍，法定节假日为三倍）。",
+        "citations": [
+          1
+        ],
+        "insufficient_context": false
+      }
+    },
+    {
+      "id": "a07",
+      "question": "年假没休完能换成钱吗？",
+      "draft": {
+        "answer": "不能。根据员工手册，全年带薪年假为十天，入职满一年后生效；年假可在次年三月底前使用完毕，未使用部分不折现。[1]",
+        "citations": [
+          1
+        ],
+        "insufficient_context": false
+      }
+    },
+    {
+      "id": "a08",
+      "question": "报销的钱什么时候能打到卡上？",
+      "draft": {
+        "answer": "根据资料，报销单经直属主管审批后流转至财务部审核，审核通过后三个工作日内打款至员工工资卡。因此打款时间取决于财务部审核通过的时点，即审核通过后三个工作日内到账（打入工资卡，而非任意银行卡）。",
+        "citations": [
+          1
+        ],
+        "insufficient_context": false
+      }
+    }
+  ]
+}
