@@ -18,8 +18,6 @@
   "_distractors_note": "下列来源是有意放入的干扰文档：它们与某些问题共享词汇，但不该成为任何用例的答案，因此不要求被 required_sources 覆盖。它们的作用是让召回不再因为语料里只有几篇文档就必然命中，从而让 source_recall 有真实的失败可能。",
   "distractors": [
     "信息安全规范.md",
-    "采购管理办法.md",
-    "考勤与请假细则.md",
     "发票.md",
     "年假.md",
     "采购.md",
@@ -584,6 +582,46 @@
       "kind": "retrieval",
       "family": "terse",
       "note": "[省略] 原文为「病假需附医院证明」；同句还包含请假提前一天的规则，易混淆"
+    },
+    {
+      "question": "请假要提前多久申请，连续请三天以上病假还要补什么材料？",
+      "groups": ["人事"],
+      "required_sources": ["员工手册.md", "考勤与请假细则.md"],
+      "kind": "retrieval",
+      "family": "multihop",
+      "note": "[多跳] 「提前一天」在员工手册， 「连续病假超过三天提交复诊记录」在考勤细则；只召回一篇则答案残缺"
+    },
+    {
+      "question": "年假没休完能折现吗？那调休没用完呢？",
+      "groups": ["人事"],
+      "required_sources": ["员工手册.md", "考勤与请假细则.md"],
+      "kind": "retrieval",
+      "family": "multihop",
+      "note": "[多跳] 年假「未使用部分不折现」在员工手册；调休「逾期不折算加班费」在考勤细则；两问两答缺一不可"
+    },
+    {
+      "question": "出差期间怎么算考勤？出差跨周末算加班吗？加班费几倍？",
+      "groups": ["人事"],
+      "required_sources": ["考勤与请假细则.md", "员工手册.md"],
+      "kind": "retrieval",
+      "family": "multihop",
+      "note": "[多跳] 出勤认定与跨周末不计加班在考勤细则；加班费 1.5/2/3 倍在员工手册"
+    },
+    {
+      "question": "买办公用品要几家报价？差旅报销要不要也比价？",
+      "groups": ["财务"],
+      "required_sources": ["采购管理办法.md", "报销流程.md"],
+      "kind": "retrieval",
+      "family": "multihop",
+      "note": "[多跳] 比价要求只在采购管理办法；差旅走报销流程、不适用采购办法，需要两篇一起才能答全"
+    },
+    {
+      "question": "验收和交发票分别是几个工作日内完成？",
+      "groups": ["财务"],
+      "required_sources": ["采购管理办法.md", "报销流程.md"],
+      "kind": "retrieval",
+      "family": "multihop",
+      "note": "[多跳] 到货后五个工作日内验收在采购办法；纸质发票五个工作日内交财务部在报销流程；同一数字、两处出处"
     }
   ]
 }
