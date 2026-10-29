@@ -1,0 +1,58 @@
+{
+  "top_k": 4,
+  "mean_coverage": 0.2333333333333333,
+  "rows": [
+    {
+      "id": "g1",
+      "coverage": 0.0,
+      "missing": [
+        "报销流程.md",
+        "采购管理办法.md",
+        "员工手册.md"
+      ],
+      "ranked": [
+        "加班.md"
+      ]
+    },
+    {
+      "id": "g2",
+      "coverage": 0.6666666666666666,
+      "missing": [
+        "考勤与请假细则.md"
+      ],
+      "ranked": [
+        "信息安全规范.md",
+        "员工手册.md"
+      ]
+    },
+    {
+      "id": "g3",
+      "coverage": 0.0,
+      "missing": [
+        "报销流程.md",
+        "采购管理办法.md"
+      ],
+      "ranked": []
+    },
+    {
+      "id": "g4",
+      "coverage": 0.5,
+      "missing": [
+        "员工手册.md"
+      ],
+      "ranked": [
+        "考勤与请假细则.md"
+      ]
+    },
+    {
+      "id": "g5",
+      "coverage": 0.0,
+      "missing": [
+        "报销流程.md",
+        "采购管理办法.md",
+        "考勤与请假细则.md"
+      ],
+      "ranked": []
+    }
+  ]
+}
