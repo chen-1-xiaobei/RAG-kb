@@ -33,6 +33,7 @@ ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
 
 from auth import Principal  # noqa: E402
+from clarification import REFUSAL_TEXT  # noqa: E402  纯函数模块，不拉起模型栈
 
 
 @dataclass
@@ -130,23 +131,36 @@ def record(cases: list[dict], fixture_path: Path) -> int:
 # 评测
 # ---------------------------------------------------------------------------
 
-def evaluate(cases: list[dict], drafts: dict[str, dict]) -> tuple[list[dict], list[str]]:
-    from app import REFUSAL_TEXT, finalize_answer
-    from retrieval import retrieve_ranked
+def evaluate(cases: list[dict], drafts: dict[str, dict],
+             retrieve_fn=None, finalize_fn=None) -> tuple[list[dict], list[str]]:
+    """跑一遍评测。
+
+    `retrieve_fn` / `finalize_fn` 可注入：生产路径默认用真实实现，
+    单测里换成桩就不需要建索引、也不需要导入 app（它会在 import 期拉起模型栈）。
+    这一层注入是踩过坑之后加的——原来的实现把 import 写死在函数体内，
+    单测在 CI 上没有 index.json 就直接 FileNotFoundError。
+    """
+    if retrieve_fn is None:
+        from retrieval import retrieve_ranked as retrieve_fn
+    if finalize_fn is None:
+        from app import finalize_answer as finalize_fn
 
     results: list[dict] = []
     missing: list[str] = []
 
     for case in cases:
-        principal = Principal("eval-user", frozenset(case["groups"]))
-        hits = retrieve_ranked(case["question"], 4, principal)
         draft = drafts.get(case["id"])
 
+        # 先看固件在不在，再去检索：没有草稿就没有可评测的东西，
+        # 没必要白跑一次检索（也会让"缺固件"这件事被检索错误盖住）。
         if case["expect"] == "answer" and draft is None:
             missing.append(case["id"])
             continue
 
-        response = finalize_answer(
+        principal = Principal("eval-user", frozenset(case["groups"]))
+        hits = retrieve_fn(case["question"], 4, principal)
+
+        response = finalize_fn(
             case["question"], hits, as_draft(draft) if draft else None, "eval"
         )
 

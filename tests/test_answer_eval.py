@@ -97,11 +97,25 @@ def test_fixture_drafts_have_expected_shape():
 
 
 def test_missing_draft_is_reported_not_silently_passed():
-    """没有草稿的 answer 用例必须被记入 missing，而不是当成通过。"""
+    """没有草稿的 answer 用例必须被记入 missing，而不是当成通过。
+
+    这里注入桩：不建索引、不导入 app。原来的写法在 CI 上直接
+    FileNotFoundError（单测任务不建索引），属于"本地绿、CI 红"。
+    """
     cases = [{"id": "x", "question": "q", "groups": ["public"], "expect": "answer",
               "required_sources": [], "must_contain": [], "must_not_contain": []}]
-    _, missing = evaluate_answers.evaluate(cases, {})
+    called = {"retrieve": 0}
+
+    def fake_retrieve(question, k, principal):
+        called["retrieve"] += 1
+        return []
+
+    results, missing = evaluate_answers.evaluate(
+        cases, {}, retrieve_fn=fake_retrieve, finalize_fn=lambda *args: None
+    )
     assert missing == ["x"]
+    assert results == []
+    assert called["retrieve"] == 0, "缺固件时不应白跑一次检索"
 
 
 def test_summarize_counts_each_metric():
