@@ -28,8 +28,9 @@ class AgentState(TypedDict, total=False):
     # 模型据此把工具结果与调用对上号
     messages: Annotated[list[AnyMessage], add_messages]
     # per-request 工具闭包表：工具名 -> 已绑定 Principal 的工具实例（模型不可见）。
-    # 注意：callable 放 state 只在无 checkpointer 的纯内存 invoke 下安全；
-    # 若将来接 checkpoint 持久化，需改为 state 存工具名、节点从注册表取实例。
+    # **已迁移到 config**（`config["configurable"]["tools"]`），因为闭包不可序列化、
+    # 而 checkpointer 会把 state 落盘。用 tools.resolve_tools(state, config) 取。
+    # 保留字段仅为兼容既有测试与脚本里的 state 字面量。
     tools: dict[str, Any]
     hits: list[Any]        # 跨轮累积的检索证据 [(Document, score)]，按 id 去重
     table_rows: list[Any]  # 跨轮累积的表格伪 Document
@@ -81,11 +82,16 @@ def build_agent_graph(
     answer_node: Callable[[AgentState], dict],
     max_tool_rounds: int = 3,
     route_after_agent: Callable[[AgentState], str] | None = None,
+    checkpointer: Any = None,
 ):
     """组装 Agentic RAG 图：agent -> [tools -> agent]* -> answer。
 
     三个节点与可选路由全部注入式传入（与旧版 retrieve/rerank/answer 同风格），
     单测可注入 stub 节点与 stub 路由，不触碰任何模型。
+
+    `checkpointer` 传入后，每次执行的状态会按 `thread_id` 存档：
+    可以事后回看「这一轮走了几步、每步调了什么工具」，失败时也能从最后一个
+    存档续跑。thread 的划分规则见 checkpointing.py——**按轮次而非按会话**。
     """
     graph = StateGraph(AgentState)
     graph.add_node("agent", agent_node)
@@ -96,4 +102,4 @@ def build_agent_graph(
     graph.add_conditional_edges("agent", route, {"tools": "tools", "answer": "answer"})
     graph.add_edge("tools", "agent")
     graph.add_edge("answer", END)
-    return graph.compile()
+    return graph.compile(checkpointer=checkpointer)

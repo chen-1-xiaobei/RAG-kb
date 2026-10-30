@@ -22,6 +22,7 @@ from typing import Any, Callable
 
 from langchain_core.documents import Document
 from langchain_core.messages import ToolMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
 from auth import Principal
@@ -540,7 +541,22 @@ def memo_key_for(name: str, args: dict) -> str | None:
         return None
 
 
-def execute_tools(state: dict) -> dict:
+def resolve_tools(state: dict, config: RunnableConfig | None = None) -> dict:
+    """取本轮的工具表：**优先 config，其次 state**。
+
+    为什么要从 state 挪出来：工具是**按请求构造、绑定 Principal 的闭包**，
+    而 checkpointer 会把 state 序列化落盘——闭包不可序列化。放在
+    `config["configurable"]["tools"]` 里则完全不参与持久化，每次调用现传。
+
+    保留 state 兜底是为了兼容既有测试与脚本（它们把工具放进 state 字面量）。
+    """
+    configured = ((config or {}).get("configurable") or {}).get("tools")
+    if configured:
+        return configured
+    return state.get("tools") or {}
+
+
+def execute_tools(state: dict, config: RunnableConfig | None = None) -> dict:
     """工具节点：执行最后一条 AIMessage 的全部 tool_calls。
 
     关键约定：
@@ -551,6 +567,7 @@ def execute_tools(state: dict) -> dict:
     - 未知工具/工具异常 -> error ToolMessage：把错误交给模型决定下一步，
       循环不中断、证据不累积。
     """
+    tools = resolve_tools(state, config)
     last = state["messages"][-1]
     calls = getattr(last, "tool_calls", None) or []
     round_no = state.get("tool_rounds", 0) + 1
@@ -569,7 +586,7 @@ def execute_tools(state: dict) -> dict:
             "tool_call round=%d name=%s args=%s",
             round_no, call["name"], json.dumps(call["args"], ensure_ascii=False)[:300],
         )
-        tool_fn = (state.get("tools") or {}).get(call["name"])
+        tool_fn = tools.get(call["name"])
         if tool_fn is None:
             logger.warning("tool_unknown name=%s", call["name"])
             outputs.append(ToolMessage(

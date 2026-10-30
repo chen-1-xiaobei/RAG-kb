@@ -11,6 +11,8 @@ langchain-text-splitters>=1.0.0
 langchain-huggingface>=1.0.0
 langchain-deepseek>=1.1.0
 langgraph>=1.0.0
+# 执行轨迹持久化（checkpointing.py 会优雅退化为内存，但持久化才能跨重启回看）
+langgraph-checkpoint-sqlite>=3.0.0
 PyJWT>=2.9.0
 pytest>=8.3.0
 httpx>=0.28.0

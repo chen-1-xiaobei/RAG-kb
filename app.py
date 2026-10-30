@@ -25,6 +25,7 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnableConfig
 from langchain_deepseek import ChatDeepSeek
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
@@ -33,6 +34,7 @@ from starlette.datastructures import MutableHeaders
 from agent_flow import AgentState, build_agent_graph, build_evidence
 from auth import Principal, get_principal
 import cassette
+from checkpointing import build_checkpointer, latest_thread, trace_steps, turn_thread_id
 import obs
 from claims import ClaimStore, render
 from clarification import REFUSAL_TEXT, decide
@@ -60,7 +62,7 @@ from streaming import (
     sse,
     stream_answer,
 )
-from tools import DATA, TableRegistry, build_tools, execute_tools
+from tools import DATA, TableRegistry, build_tools, execute_tools, resolve_tools
 
 # 日志格式里带 rid / conv：没有这两个键，并发时十几行日志交错，无法把一次请求串起来
 obs.install_logging()
@@ -237,17 +239,19 @@ def generate_answer(question: str, hits, conversation_id: str) -> AskResponse:
     return finalize_answer(question, hits, draft, conversation_id)
 
 
-def _agent_agent(state: AgentState) -> dict:
+def _agent_agent(state: AgentState, config: RunnableConfig | None = None) -> dict:
     """agent 节点：绑定 per-request 工具闭包做决策（调工具或收手作答）。
 
-    工具实例从 state 取（已绑定 Principal），模型只能提供查询参数。
+    工具实例从 **config** 取（已绑定 Principal，见 tools.resolve_tools），
+    模型只能提供查询参数。放在 config 而不是 state，是因为工具是闭包、
+    不可序列化，而 state 会被 checkpointer 落盘。
 
     **系统提示词只放我们自己写的指令，一行用户文本都不掺。**
     历史以真实角色的消息（user / assistant）插入到消息列表里，因此
     "用户说了什么"永远以 user 角色呈现，模型无法把它当成系统指令；
     也不需要自己拼标签，就不存在"伪造闭合标签"这类问题。
     """
-    llm_with_tools = get_llm().bind_tools(list(state["tools"].values()))
+    llm_with_tools = get_llm().bind_tools(list(resolve_tools(state, config).values()))
     started = perf_counter()
     history = state.get("history") or []
     response = llm_with_tools.invoke(
@@ -265,8 +269,8 @@ def _agent_agent(state: AgentState) -> dict:
     return {"messages": [response]}
 
 
-def _agent_tools(state: AgentState) -> dict:
-    return execute_tools(state)
+def _agent_tools(state: AgentState, config: RunnableConfig | None = None) -> dict:
+    return execute_tools(state, config)
 
 
 def _agent_answer(state: AgentState) -> dict:
@@ -323,10 +327,32 @@ def _agent_answer(state: AgentState) -> dict:
     )}
 
 
+# 执行轨迹存档：按**轮次**分线程（见 checkpointing.py 的说明），
+# SQLite 可用时持久化到 checkpoints.db，否则退化为内存。
+checkpointer = build_checkpointer(ROOT / "checkpoints.db")
 agent_graph = build_agent_graph(
     _agent_agent, _agent_tools, _agent_answer,
     max_tool_rounds=settings.max_tool_rounds,
+    checkpointer=checkpointer,
 )
+
+
+def graph_config(conversation: Conversation | None, tools: dict) -> dict:
+    """本轮执行配置：工具闭包 + 线程 ID + 递归上限。
+
+    工具放 config 不放 state（闭包不可序列化）；线程按轮次划分，
+    避免上一轮的 hits/table_rows 被合并进本轮、绕过"每轮重新检索"。
+
+    线程序号用**本轮开始前的 turn_count**：它每次落库都会变（一问一答算 2 行），
+    因此两轮之间必然不同。查询侧不靠这个数字推算式，而是按前缀扫最新线程
+    （见 checkpointing.threads_for 的说明）。
+    """
+    turn_no = conversation.turn_count if conversation else 0
+    thread_id = turn_thread_id(conversation.conversation_id if conversation else "", turn_no)
+    return {
+        "recursion_limit": 2 * settings.max_tool_rounds + 5,
+        "configurable": {"thread_id": thread_id, "tools": tools},
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -352,12 +378,15 @@ def _authorize(req: AskRequest, principal: Principal) -> Conversation:
     return conversation_store.create(principal.user_id, principal.allowed_groups)
 
 
-def build_turn_state(question: str, principal: Principal, tools: dict,
+def build_turn_state(question: str, principal: Principal,
                      conversation: Conversation | None) -> dict:
     """把 per-request 的字段接到纯函数 conversation.build_turn_state 上。
 
     规则 A（不跨轮复用证据）的实现就在那个函数里——放在无模型依赖的模块，
     才能在没有 embedding/reranker 的环境下被测到。
+
+    **工具不再进 state**：它是按请求构造、绑定 Principal 的闭包，而 checkpointer
+    会把 state 序列化落盘。工具的传递改走 `graph_config()` 里的 config。
     """
     return conversation_build_turn_state(
         question,
@@ -367,7 +396,6 @@ def build_turn_state(question: str, principal: Principal, tools: dict,
         conversation_id=conversation.conversation_id if conversation else "",
         user_id=principal.user_id,
         groups=list(principal.groups),
-        tools=tools,
         messages=[HumanMessage(question)],
         claim_events=[],
     )
@@ -536,8 +564,42 @@ def delete_conversation(conversation_id: str, principal: Principal = Depends(get
     return {"deleted": True}
 
 
-@app.post("/ask", response_model=AskResponse)
-def ask(req: AskRequest, principal: Principal = Depends(get_principal)):
+@app.get("/conversations/{conversation_id}/trace")
+def conversation_trace(conversation_id: str, turn: int | None = None,
+                       principal: Principal = Depends(get_principal)):
+    """查看某一轮 Agent 的执行轨迹（每一步进了哪个节点、调了哪些工具）。
+
+    **鉴权与会话续话同一套规则**：checkpoint 里存着提问原文、检索证据与模型回复，
+    敏感度与会话内容相同，因此不属于你、或组关系变更一律 404。
+
+    只返回**步骤摘要**，不返回完整 state——后者等价于把整轮对话内容再暴露一遍。
+    `turn` 缺省取会话当前轮次。
+    """
+    try:
+        conversation = authorize_session(
+            conversation_store, conversation_id, principal.user_id, principal.allowed_groups
+        )
+    except SessionDenied:
+        raise HTTPException(404, "会话不存在") from None
+
+    turn_no = conversation.turn_count if turn is None else turn
+    if turn is None:
+        # 缺省看"最近一次执行"：从 turn_count 往下探测存在的线程
+        thread_id = latest_thread(agent_graph, conversation.conversation_id,
+                                  conversation.turn_count)
+    else:
+        thread_id = turn_thread_id(conversation.conversation_id, turn_no)
+    if not thread_id:
+        return {"conversation_id": conversation.conversation_id, "turn": turn_no,
+                "thread_id": None, "steps": []}
+    return {
+        "conversation_id": conversation.conversation_id,
+        "turn": turn_no,
+        "thread_id": thread_id,
+        "steps": trace_steps(agent_graph, thread_id),
+    }
+
+
     logger.info(
         "rag_query_start user=%s top_k=%d question=%s",
         principal.user_id, req.top_k, question_for_log(req.question),
@@ -581,8 +643,8 @@ def agent_ask(req: AskRequest, principal: Principal = Depends(get_principal)):
             default_top_k=settings.tool_default_top_k,
         )
         result = agent_graph.invoke(
-            build_turn_state(req.question, principal, tools, conversation),
-            config={"recursion_limit": 2 * settings.max_tool_rounds + 5},
+            build_turn_state(req.question, principal, conversation),
+            config=graph_config(conversation, tools),
         )
     response = result["response"]
     _persist(conversation, req.question, response)
@@ -636,7 +698,8 @@ async def _stream_llm_chunks(question: str, evidence: list):
             yield text
 
 
-async def _stream_events(question: str, conversation: Conversation, state: dict):
+async def _stream_events(question: str, conversation: Conversation, state: dict,
+                         config: dict):
     """SSE 事件生成器：检索 -> 判定 -> （流式生成 | 一次性下发）-> sources -> done。"""
     started = perf_counter()
     yield sse(EVENT_META, {
@@ -645,10 +708,7 @@ async def _stream_events(question: str, conversation: Conversation, state: dict)
     })
 
     try:
-        result = await run_in_threadpool(
-            agent_graph.invoke, state,
-            {"recursion_limit": 2 * settings.max_tool_rounds + 5},
-        )
+        result = await run_in_threadpool(agent_graph.invoke, state, config)
     except Exception:
         # 堆栈只进日志，不下发给客户端
         logger.exception("agent_stream_failed")
@@ -740,11 +800,11 @@ async def agent_ask_stream(req: AskRequest, principal: Principal = Depends(get_p
         truncate=settings.tool_text_truncate,
         default_top_k=settings.tool_default_top_k,
     )
-    state = build_turn_state(req.question, principal, tools, conversation)
+    state = build_turn_state(req.question, principal, conversation)
     state["defer_generation"] = True
 
     return StreamingResponse(
-        _stream_events(req.question, conversation, state),
+        _stream_events(req.question, conversation, state, graph_config(conversation, tools)),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

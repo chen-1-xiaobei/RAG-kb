@@ -4,7 +4,7 @@
 [![CI](https://github.com/chen-1-xiaobei/RAG-kb/actions/workflows/ci.yml/badge.svg)](https://github.com/chen-1-xiaobei/RAG-kb/actions/workflows/ci.yml)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-1.0-1C3C3C)](https://langchain-ai.github.io/langgraph/)
-[![Tests](https://img.shields.io/badge/tests-234%20passed-brightgreen)](#测试与评测)
+[![Tests](https://img.shields.io/badge/tests-255%20passed-brightgreen)](#测试与评测)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 > 面向企业内部制度与流程问答的 Agentic RAG 系统。RAG 只是它可调用的工具之一：模型自主决定
@@ -291,6 +291,37 @@ docker compose up --build
 - 权限约定：`data/` 根目录文件 → `group=public`；子目录名为权限组。服务端身份解析后按组**预过滤**，未授权内容不参与 top-k 竞争。
 - **结构化表格数据**：把 `.csv` 放入 `data/`（组权限约定与文档相同），服务启动时载入内存 sqlite（只读），`/agent/ask` 的模型通过 `list_tables`/`query_table` 工具查询——表格与数值查询是向量检索的短板，交给 SQL 补。查询白名单校验 + SELECT-only + sqlite authorizer 三层只读；未授权表与不存在的表返回同一文案（不泄露存在性）。改 CSV 后重启服务生效。
 
+## 执行轨迹（checkpointer / time travel）
+
+Agent 图的每次执行都由 `checkpointer` 存档，可以事后回看"这一轮走了几步、每步进了哪个节点、
+调了哪些工具"，也能在一轮中途失败时从最后一个存档续跑。
+
+```console
+$ curl -H "X-Dev-User: alice" -H "X-Dev-Groups: %E8%B4%A2%E5%8A%A1" \
+    http://127.0.0.1:8000/conversations/<id>/trace
+{"conversation_id": "...", "turn": 2, "thread_id": "...:2", "steps": [
+  {"next": ["__start__"], "message_count": 0, "tool_calls": [], "hits": 0, "has_response": false},
+  {"next": ["agent"],     "message_count": 1, "tool_calls": [], "hits": 0, "has_response": false},
+  {"next": ["answer"],    "message_count": 2, "tool_calls": [], "hits": 0, "has_response": false},
+  {"next": [],            "message_count": 2, "tool_calls": ["search_knowledge_base"], "hits": 4, "has_response": true}
+]}
+```
+
+两处设计与现有约束强相关：
+
+- **线程按轮次划分，不按会话。** `thread_id = {conversation_id}#{本轮开始前的 turn_count}`。
+  如果同一会话共享一个线程，LangGraph 会把上一轮的 `hits` / `table_rows` 合并进本轮——
+  等于绕过「每轮重新检索、不复用跨轮证据」（否则权限判定会退化成"首次检索时判定一次"）。
+  跨轮记忆仍由 `conversations.db` 负责，那里带着创建者的 principal 与权限组指纹。
+- **工具从 `config` 传入，不在 `state` 里。** 工具是按请求构造、绑定 Principal 的闭包，
+  不可序列化；挂在 state 上会让每个 super-step 的落盘直接失败。这也是把
+  `AgentState.tools` 迁到 `config["configurable"]["tools"]` 的原因。
+
+`/conversations/{id}/trace` **与会话续话共用同一套鉴权**（不属于你、或组关系变更一律 404）：
+存档里有提问原文、检索证据与模型回复，敏感度等同会话内容。接口只返回**步骤摘要**，
+不返回完整 state。持久化在 `checkpoints.db`（已 gitignore）；未安装
+`langgraph-checkpoint-sqlite` 时自动退化为内存存档，功能不中断、轨迹不跨进程。
+
 ## 可观测性
 
 三件套里目前做了两件：**日志**和**指标**，追踪（trace）还没有。
@@ -391,7 +422,7 @@ python evaluate.py --update-baseline  # 人工确认指标后刷新 evals/baseli
 
 | 任务 | 内容 | 特点 |
 | --- | --- | --- |
-| `test` | `python -m pytest -q`（234 个离线单测） | 不下载模型、不调用 LLM，几十秒出结果 |
+| `test` | `python -m pytest -q`（255 个离线单测） | 不下载模型、不调用 LLM，几十秒出结果 |
 | `eval` | `python ingest.py` + `python evaluate.py` + `python evaluate_answers.py` | 真实跑粗排 + 精排，**严格校验 `evals/baseline.json`**；不达标或相对基线回退即失败 |
 
 分工的理由：单测是"代码逻辑没坏"的快速反馈，评测是"检索质量没退化"的慢速把关，两者失败时的排查方向完全不同。
