@@ -1,0 +1,89 @@
+{
+  "base_url": "http://127.0.0.1:8018",
+  "phases": {
+    "refusal_fast": [
+      {
+        "concurrency": 1,
+        "requests": 2,
+        "failures": 0,
+        "wall_seconds": 0.1,
+        "qps": 15.94,
+        "p50_ms": 63.0,
+        "p95_ms": 72.0,
+        "max_ms": 72.0,
+        "server_stage_avg_s": {
+          "rag_latency_seconds[endpoint=\"ask\",stage=\"total\"]": 7.939,
+          "rag_stage_seconds[stage=\"coarse\"]": 0.054,
+          "rag_stage_seconds[stage=\"rerank\"]": 7.87
+        }
+      }
+    ],
+    "retrieval_warm": [
+      {
+        "concurrency": 1,
+        "requests": 2,
+        "failures": 0,
+        "wall_seconds": 2.6,
+        "qps": 0.77,
+        "p50_ms": 1300.0,
+        "p95_ms": 1370.0,
+        "max_ms": 1370.0,
+        "server_stage_avg_s": {
+          "rag_latency_seconds[endpoint=\"ask\",stage=\"total\"]": 4.608,
+          "rag_stage_seconds[stage=\"coarse\"]": 0.055,
+          "rag_stage_seconds[stage=\"rerank\"]": 2.687
+        }
+      }
+    ],
+    "retrieval_cold": [
+      {
+        "concurrency": 1,
+        "requests": 2,
+        "failures": 0,
+        "wall_seconds": 47.5,
+        "qps": 0.04,
+        "p50_ms": 23772.0,
+        "p95_ms": 26311.0,
+        "max_ms": 26311.0,
+        "server_stage_avg_s": {
+          "rag_latency_seconds[endpoint=\"ask\",stage=\"total\"]": 23.767,
+          "rag_stage_seconds[stage=\"coarse\"]": 0.046,
+          "rag_stage_seconds[stage=\"rerank\"]": 22.509
+        }
+      },
+      {
+        "concurrency": 4,
+        "requests": 8,
+        "failures": 0,
+        "wall_seconds": 82.9,
+        "qps": 0.1,
+        "p50_ms": 35033.0,
+        "p95_ms": 54629.0,
+        "max_ms": 54629.0,
+        "server_stage_avg_s": {
+          "rag_latency_seconds[endpoint=\"ask\",stage=\"total\"]": 30.05,
+          "rag_stage_seconds[stage=\"coarse\"]": 0.082,
+          "rag_stage_seconds[stage=\"rerank\"]": 29.203
+        }
+      }
+    ],
+    "agent": [
+      {
+        "concurrency": 1,
+        "requests": 2,
+        "failures": 0,
+        "wall_seconds": 15.5,
+        "qps": 0.13,
+        "p50_ms": 7758.0,
+        "p95_ms": 12018.0,
+        "max_ms": 12018.0,
+        "server_stage_avg_s": {
+          "rag_agent_rounds[endpoint=\"agent\"]": 1.0,
+          "rag_latency_seconds[endpoint=\"agent\",stage=\"total\"]": 9.125,
+          "rag_stage_seconds[stage=\"coarse\"]": 0.06,
+          "rag_stage_seconds[stage=\"rerank\"]": 5.61
+        }
+      }
+    ]
+  }
+}

@@ -600,6 +600,8 @@ def conversation_trace(conversation_id: str, turn: int | None = None,
     }
 
 
+@app.post("/ask", response_model=AskResponse)
+def ask(req: AskRequest, principal: Principal = Depends(get_principal)):
     logger.info(
         "rag_query_start user=%s top_k=%d question=%s",
         principal.user_id, req.top_k, question_for_log(req.question),
