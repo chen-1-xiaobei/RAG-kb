@@ -67,6 +67,60 @@ query_table('人事/工资表', ...)     → 表不存在。          （与无�
 query_table(..., 'DELETE FROM ...')  → 仅支持只读 SELECT 查询该表。
 ```
 
+## 一个最小客户端：看清楚协议到底传了什么
+
+```bash
+python -m mcp_server.client_demo
+```
+
+它做的事和 Claude Desktop 完全一样，只是把每一步打印出来：
+
+```
+① 握手完成：server 自我介绍
+  name: rag-kb
+  protocol_version: 2026-07-28
+  instructions: 企业知识库检索服务。回答必须基于工具返回的资料并标注引用编号…
+
+② tools/list：客户端看到的工具清单
+  · search_knowledge_base   参数: ['question', 'top_k']  必填: ['question']
+  · list_tables             参数: []
+  · query_table             参数: ['table', 'sql']       必填: ['table', 'sql']
+
+③ tools/call：search_knowledge_base
+  <document citation="1" source="报销流程.md" section="报销步骤">
+  员工在费用发生后三十天内，在 OA 系统填写报销单…
+  </document>
+
+④ tools/call：query_table（合法查询）
+  表 财务/报销标准 命中 2 行：| 住宿-一线城市 | 500元/晚 |
+
+④b tools/call：query_table（DELETE 被拒）
+  仅支持只读 SELECT 查询该表。
+
+⑤ resources/read：kb://index/metadata
+  chunk 数: 126 / embedding: BAAI/bge-small-zh-v1.5 / 维度: 512
+
+⑥ prompts/get：grounded_answer
+  请仅依据工具返回的资料回答问题，并在句末用 [1][2] 标注引用编号…
+```
+
+**关键认识：MCP 不过就是几次 JSON-RPC 往返。** 没有魔法，也没有"AI 自动发现"——
+客户端拿到 `tools/list` 的 schema 交给模型，模型决定调哪个，客户端再发 `tools/call`。
+
+客户端的三个要素：
+
+```python
+StdioServerParameters(
+    command=sys.executable,           # 用什么程序启动
+    args=["-m", "mcp_server.server"], # 启动参数
+    cwd=str(ROOT),                    # 工作目录
+    env={"RAG_KB_USER": "...", "RAG_KB_GROUPS": "财务"},   # ← 身份在这里
+)
+```
+
+**注意 `env` 那一行**：客户端通过环境变量决定"这个 server 实例代表谁"。这就是
+"一个 server 实例 = 一个身份"在客户端侧的样子。
+
 ## 三个设计决定
 
 ### ① 不暴露写操作
