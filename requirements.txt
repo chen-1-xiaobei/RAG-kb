@@ -1,4 +1,4 @@
-fastapi>=0.115.0
+﻿fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 pypdf>=5.0.0
 python-dotenv>=1.0.1
@@ -17,6 +17,8 @@ PyJWT>=2.9.0
 pytest>=8.3.0
 httpx>=0.28.0
 markdownify>=1.0.0
+# 可选：MCP server（mcp_server/）需要，未装时相关测试自动跳过
+# mcp>=2.0
 # torch 建议先单独安装 CPU 版（避免 PyPI 默认拉取数 GB 的 CUDA 依赖）：
 #   pip install torch --index-url https://download.pytorch.org/whl/cpu
 torch>=2.5.0
