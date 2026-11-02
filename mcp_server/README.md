@@ -121,6 +121,55 @@ StdioServerParameters(
 **注意 `env` 那一行**：客户端通过环境变量决定"这个 server 实例代表谁"。这就是
 "一个 server 实例 = 一个身份"在客户端侧的样子。
 
+## LLM 驱动的客户端：让模型自己决定调什么
+
+```bash
+python -m mcp_server.agent_client "一线城市出差住一晚，最多能报多少住宿费？"
+```
+
+和上面那个 demo 的区别：demo 是**人**写死调哪个工具，这个是**模型**决定。
+实测轨迹（三轮，模型全程自主）：
+
+```
+工具清单已获取：['search_knowledge_base', 'list_tables', 'query_table']
+
+--- 第 1 轮：模型决定调用 2 个工具（并行）
+    → search_knowledge_base({'question': '一线城市出差住宿费报销标准上限是多少'})
+    → list_tables({})
+--- 第 2 轮：模型决定调用 1 个工具
+    → query_table({'table': '财务/报销标准',
+                   'sql': 'SELECT 项目, 标准, 说明 FROM "财务/报销标准" WHERE 项目 LIKE \'%住宿%\' ...'})
+--- 第 3 轮：模型决定作答
+    → 一线城市上限 500 元/晚 [1]；其他城市 350 元/晚 [1]；超 5000 元需双签 [2]
+    → "超出部分能否报销，知识库里没有查到相关规定，建议向财务确认"
+```
+
+三个值得注意的细节：
+
+1. **SQL 是模型自己写的，而且写对了带引号的表名**——因为上一轮 `list_tables` 告诉了它
+   `财务/报销标准`。这就是"先 list 再 query"这个设计的意义。
+2. **它并行调了两个工具**（检索 + 列清单），模型自己判断这两件事可以同时做。
+3. **它承认了知识库的边界**（"超出部分……没有查到相关规定"），而不是编一个答案。
+
+## 这个循环有多短
+
+```python
+messages = [SystemMessage(系统提示), HumanMessage(问题)]
+for _ in range(MAX_ROUNDS):
+    response = await bound.ainvoke(messages)      # 模型决定
+    if not response.tool_calls:                   # 不调工具 -> 收工
+        return response.content
+    for call in response.tool_calls:              # 调工具
+        result = await mcp.call_tool(call["name"], call["args"])
+        messages.append(ToolMessage(content=结果, tool_call_id=call["id"]))
+```
+
+**LangGraph 做的就是这件事的工程化版本**——加了轮数上限、证据门槛、状态持久化、
+可恢复。手写一遍才看得清"框架帮你做了什么"。
+
+**MCP 工具转 function calling 几乎零转换**：MCP 的 `input_schema` 就是 JSON Schema，
+OpenAI 风格的工具定义要的也是 JSON Schema，只需把字段名换成 `parameters`。
+
 ## 三个设计决定
 
 ### ① 不暴露写操作
