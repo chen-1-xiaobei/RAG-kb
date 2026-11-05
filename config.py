@@ -47,8 +47,12 @@ class Settings:
     tool_default_top_k: int = int(os.getenv("TOOL_DEFAULT_TOP_K", "4"))
     # 工具给模型看的每条资料截断字符数（答案节点的证据不受影响）
     tool_text_truncate: int = int(os.getenv("TOOL_TEXT_TRUNCATE", "500"))
-    # 向量后端：milvus（默认）| json（离线兜底，评测与 CI 可用）
-    vector_backend: str = os.getenv("VECTOR_BACKEND", "milvus")
+    # 向量后端：json（默认，全量点积，零依赖）| milvus（可选，见 README 实测对比）
+    # 实测（scripts/bench_backends.py）：126 chunk 下两者都是毫秒级，
+    # 而查询编码占 22~25ms、精排占 12~28s——存储不是瓶颈；
+    # 2,000/20,000 条时 milvus-lite 的检索开销约为全量点积的 48 倍（无 ANN 索引）。
+    # 因此默认保持 json，Milvus 作为可切换后端保留，理由见 README「向量后端」一节。
+    vector_backend: str = os.getenv("VECTOR_BACKEND", "json")
     # Milvus 连接：本地文件即 Milvus Lite；填 http://host:19530 则连独立服务
     milvus_uri: str = os.getenv("MILVUS_URI", "milvus.db")
     milvus_collection: str = os.getenv("MILVUS_COLLECTION", "kb_chunks")

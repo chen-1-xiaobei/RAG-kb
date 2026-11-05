@@ -469,10 +469,10 @@ count() -> int
 
 两个实现：
 
-| 后端 | 存储 | 过滤方式 | 开关 |
-| --- | --- | --- | --- |
-| `json` | `index.json`（内存全量点积） | 内存里按 group 筛 | `VECTOR_BACKEND=json` |
-| `milvus` | Milvus Lite 本地文件 `milvus.db` | 表达式 `grp in [...]` | `VECTOR_BACKEND=milvus` |
+| 后端 | 存储 | 过滤方式 | 开关 | 默认 |
+| --- | --- | --- | --- | --- |
+| `json` | `index.json`（内存全量点积） | 内存里按 group 筛 | `VECTOR_BACKEND=json` | ✅ |
+| `milvus` | Milvus Lite 本地文件 `milvus.db` | 表达式 `grp in [...]` | `VECTOR_BACKEND=milvus` | 可选 |
 
 **过滤参数刻意设计成"一组组名"而不是 Python 谓词**：谓词翻译不成 Milvus 的过滤
 表达式，而组名两边都能翻译。这是"接口按能力定义、不按实现定义"的具体收益。
@@ -508,6 +508,9 @@ count() -> int
 
 保留这个后端的原因不是性能，而是**可验证性与可替换性**：接口已经抽象好，
 换真 Milvus 只需改 `MILVUS_URI`；而"什么时候该换"有实测数据支撑，不用猜。
+
+**因此默认后端是 `json`。** 这是一次"做了、测了、如实不用"的取舍——
+和 BM25（无收益默认关闭）、GraphRAG（权限不成立未合入）是同一个判断方式。
 
 ## 测试与评测
 

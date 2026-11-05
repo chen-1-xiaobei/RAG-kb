@@ -64,9 +64,10 @@ jobs:
         with:
           path: ~/.cache/huggingface
           key: hf-${{ runner.os }}-${{ hashFiles('config.py') }}
-      # 建立索引：默认后端是 milvus，数据写入 milvus.db（milvus-lite 本地文件模式，
-      # 不需要 Docker 或独立服务）。要跑 JSON 后端可加 --backend json。
-      - name: 建立索引（Milvus）
+      # 建立索引：默认后端是 json（写 index.json，零额外依赖）。
+      # Milvus 是可选后端，如需在 CI 验证可用 python ingest.py --backend milvus
+      # （milvus-lite 走本地文件模式，不需要 Docker 或独立服务）。
+      - name: 建立索引（JSON）
         env:
           PYTHONUTF8: "1"
         run: python ingest.py
