@@ -5,6 +5,7 @@
 - data/<文件夹>/ 内文件 -> group=文件夹名，仅该组成员可见
 """
 import re
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -118,9 +119,39 @@ def main():
                 n += 1
     if not documents:
         raise SystemExit(f"data/ 中没有可索引的 {', '.join(LOADERS)} 文件")
-    store = JSONVectorStore.from_documents(documents, embeddings, path=INDEX)
+
+    backend = _parse_backend()
+    if backend == "milvus":
+        from milvus_store import MilvusVectorStore
+
+        MilvusVectorStore.build(
+            documents,
+            embedding=embeddings,
+            uri=settings.milvus_uri,
+            collection=settings.milvus_collection,
+            metric=settings.milvus_metric,
+        )
+        target = f"milvus://{settings.milvus_uri}#{settings.milvus_collection}"
+    else:
+        JSONVectorStore.from_documents(documents, embeddings, path=INDEX)
+        target = str(INDEX)
+
     groups = sorted({doc.metadata["group"] for doc in documents})
-    print(f"indexed {len(documents)} chunks (groups: {', '.join(groups)}) -> {INDEX}")
+    print(f"indexed {len(documents)} chunks (groups: {', '.join(groups)}) -> {target} [{backend}]")
+
+
+def _parse_backend() -> str:
+    """--backend 覆盖配置；默认读 VECTOR_BACKEND（milvus）。"""
+    argv = sys.argv[1:]
+    if "--backend" in argv:
+        index = argv.index("--backend")
+        if index + 1 >= len(argv):
+            raise SystemExit("--backend 需要一个值：json 或 milvus")
+        value = argv[index + 1]
+        if value not in {"json", "milvus"}:
+            raise SystemExit("--backend 只能是 json 或 milvus")
+        return value
+    return settings.vector_backend
 
 
 if __name__ == "__main__":

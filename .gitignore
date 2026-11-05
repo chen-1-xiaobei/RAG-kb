@@ -29,4 +29,12 @@ _*.txt
 # 未纳入索引的私有数据：不进公开仓库。
 # 若要真正索引它，需要先在 loaders.py 里加 .xlsx loader，再登记到 evals/dataset.json。
 data/未交名单.xlsx
-
+# Milvus Lite 本地库（由 ingest 生成）。目录用前导斜杠锚定在仓库根，
+# 避免误伤将来可能出现的同名源码目录（collections/ 之类）。
+milvus.db
+milvus.db.meta.json
+milvus.db.lock
+/collections/
+/databases/
+/.database-staging/
+/LOCK

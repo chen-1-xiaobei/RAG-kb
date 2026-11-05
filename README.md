@@ -457,6 +457,58 @@ python scripts/loadtest.py --base-url http://127.0.0.1:8000
 3. 换更小的 reranker 或做 ONNX / 量化——属于换模型，需重新标定阈值。
 4. 加核或上 GPU。**换数据库不在这个列表里**，因为它不在瓶颈上。
 
+## 向量后端：JSON 与 Milvus
+
+检索层只依赖 `vector_backend.VectorBackend` 这一个窄接口：
+
+```python
+search(query, k, groups, score_threshold) -> list[(Document, 相似度)]
+records() -> list[dict]      # BM25 需要全量文本
+count() -> int
+```
+
+两个实现：
+
+| 后端 | 存储 | 过滤方式 | 开关 |
+| --- | --- | --- | --- |
+| `json` | `index.json`（内存全量点积） | 内存里按 group 筛 | `VECTOR_BACKEND=json` |
+| `milvus` | Milvus Lite 本地文件 `milvus.db` | 表达式 `grp in [...]` | `VECTOR_BACKEND=milvus` |
+
+**过滤参数刻意设计成"一组组名"而不是 Python 谓词**：谓词翻译不成 Milvus 的过滤
+表达式，而组名两边都能翻译。这是"接口按能力定义、不按实现定义"的具体收益。
+
+两个后端由**同一套测试**约束（`tests/test_vector_backend.py`，14 条参数化用例）：
+排序、权限预过滤、阈值语义必须逐条一致。Milvus 后端上的完整评测与 JSON 后端**完全一致**
+（54 条用例、8 项指标全 100%，门槛通过、无回退）。
+
+### 实测：这个规模下 Milvus Lite 是负收益
+
+`scripts/bench_backends.py` 把**编码耗时**与**存储耗时**分开测——不分开的话，
+比的是 embedding 模型而不是存储。
+
+| 语料 | 后端 | p50 总 | 其中编码 | **净存储** | 建库 |
+| --- | --- | --- | --- | --- | --- |
+| 126 chunk（真实） | json | 23.5ms | 24.9ms | **0.2ms** | — |
+| 126 chunk（真实） | milvus | 26.3ms | 22.5ms | **4.4ms** | — |
+| 2,000（合成） | json | 4.0ms | 0.3ms | **3.8ms** | 1.4s |
+| 2,000（合成） | milvus | 181.7ms | 0.2ms | **187.9ms** | 1.8s |
+| 20,000（合成） | json | 30.5ms | 0.4ms | **32.3ms** | 15.6s |
+| 20,000（合成） | milvus | 1324.0ms | 0.3ms | **1562.1ms** | 11.5s |
+
+三条结论：
+
+1. **真实规模（126 chunk）下两者都够快**，而查询编码占 22~25ms，存储只占 0.2~4.4ms
+   ——**换向量库不影响用户体验**，因为瓶颈在 embedding 与精排。
+2. **Milvus Lite 的检索开销约为 numpy 全量点积的 48 倍**，且随规模**线性增长**
+   （2,000 → 20,000 涨 8.3 倍，与全量点积的 8.4 倍同阶）：它在这里没有用 ANN 索引，
+   等于"带 gRPC 和 WAL 的线性扫描"。
+3. 因此 **Milvus 的价值需要三个前提同时成立**：独立服务模式（Docker）、
+   真正建了 HNSW/IVF 索引、语料大到线性扫描不可接受（十万级以上）。
+   本项目三个都不满足。
+
+保留这个后端的原因不是性能，而是**可验证性与可替换性**：接口已经抽象好，
+换真 Milvus 只需改 `MILVUS_URI`；而"什么时候该换"有实测数据支撑，不用猜。
+
 ## 测试与评测
 
 ```powershell

@@ -115,19 +115,23 @@ def bm25_search(
     store,
     query: str,
     k: int,
-    filter_fn: Callable[[dict], bool] | None = None,
+    groups: frozenset[str] | None = None,
 ) -> list[tuple[Document, float]]:
     """在允许的组内做 BM25 检索。
 
     IDF 用**全语料**统计（不是只统计允许的组）：否则不同用户的 IDF 会不同，
     同一个查询在不同权限下打分不一致，排查问题时会很困惑。
+
+    语料经 `store.records()` 取得——这是后端协议的一部分：JSON 后端直接返回内存记录，
+    Milvus 后端把 text 与元数据查回来。BM25 仍在内存里建倒排，因此它只适合中小语料。
     """
-    index = _index_for(store)
+    records = store.records()
+    index = _index_for(store, records)
     scores = index.scores(query)
 
     allowed = [
-        i for i, record in enumerate(store._records)
-        if filter_fn is None or filter_fn(record)
+        i for i, record in enumerate(records)
+        if groups is None or record.get("group") in groups
     ]
     allowed.sort(key=lambda i: scores[i], reverse=True)
 
@@ -135,7 +139,11 @@ def bm25_search(
     for i in allowed[:k]:
         if scores[i] <= 0:
             continue
-        results.append((store._to_document(i), float(scores[i])))
+        record = records[i]
+        metadata = {key: value for key, value in record.items() if key != "text"}
+        results.append(
+            (Document(page_content=record["text"], metadata=metadata), float(scores[i]))
+        )
     return results
 
 
@@ -143,11 +151,11 @@ def bm25_search(
 _CACHE: dict[tuple[int, int], BM25Index] = {}
 
 
-def _index_for(store) -> BM25Index:
-    key = (id(store), len(store._records))
+def _index_for(store, records: list[dict]) -> BM25Index:
+    key = (id(store), len(records))
     cached = _CACHE.get(key)
     if cached is None:
-        cached = BM25Index(record["text"] for record in store._records)
+        cached = BM25Index(record["text"] for record in records)
         _CACHE.clear()          # 只保留最新一份，避免旧索引占内存
         _CACHE[key] = cached
     return cached

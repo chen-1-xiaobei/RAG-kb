@@ -24,9 +24,13 @@ from langchain_huggingface import HuggingFaceEmbeddings  # noqa: E402
 from auth import Principal  # noqa: E402
 from config import settings  # noqa: E402
 from hybrid import bm25_search, rrf_fuse  # noqa: E402
-from kb_store import JSONVectorStore  # noqa: E402
 import obs  # noqa: E402
 from rerank import rerank  # noqa: E402
+from vector_backend import (  # noqa: E402
+    BackendConfigError,
+    VectorBackend,
+    open_backend,
+)
 
 ROOT = Path(__file__).parent
 INDEX = ROOT / "index.json"
@@ -49,33 +53,75 @@ embeddings = HuggingFaceEmbeddings(
 
 
 class IndexManager:
-    def __init__(self, path: Path):
-        self.path = path
-        self._store: JSONVectorStore | None = None
+    """按配置打开向量后端，并在 JSON 后端下支持按 mtime 热更新。
+
+    Milvus 不做 mtime 热更新：数据在库里而不是文件里，重建索引由 ingest 完成。
+    """
+
+    def __init__(
+        self,
+        *,
+        backend: str,
+        index_path: Path,
+        milvus_uri: str,
+        milvus_collection: str,
+        milvus_metric: str = "COSINE",
+    ):
+        self.backend = backend
+        self.path = index_path
+        self.milvus_uri = milvus_uri
+        self.milvus_collection = milvus_collection
+        self.milvus_metric = milvus_metric
+        self._store: VectorBackend | None = None
         self._mtime_ns: int | None = None
         self._lock = RLock()
 
-    def get(self) -> JSONVectorStore:
+    def get(self) -> VectorBackend:
+        with self._lock:
+            if self.backend == "json":
+                return self._get_json()
+            if self._store is None:
+                self._store = self._open()
+            return self._store
+
+    def _open(self) -> VectorBackend:
+        try:
+            store = open_backend(
+                self.backend,
+                embedding=embeddings,
+                index_path=self.path,
+                milvus_uri=self.milvus_uri,
+                milvus_collection=self.milvus_collection,
+                milvus_metric=self.milvus_metric,
+            )
+        except BackendConfigError as exc:  # 模型/维度不一致
+            raise IndexConfigError(str(exc)) from exc
+        indexed_model = store.index_metadata.get("embedding_model")
+        if indexed_model and indexed_model != settings.embedding_model:
+            raise IndexConfigError(
+                f"Index uses {indexed_model}, configured model is {settings.embedding_model}"
+            )
+        logger.info(
+            "Loaded index backend=%s records=%d", self.backend, store.count()
+        )
+        return store
+
+    def _get_json(self) -> VectorBackend:
         if not self.path.exists():
             raise FileNotFoundError(self.path)
         mtime_ns = self.path.stat().st_mtime_ns
-        with self._lock:
-            if self._store is None or self._mtime_ns != mtime_ns:
-                try:
-                    store = JSONVectorStore.load(self.path, embeddings)
-                except ValueError as exc:  # schema 版本/向量维度等索引自身问题
-                    raise IndexConfigError(str(exc)) from exc
-                indexed_model = store.index_metadata.get("embedding_model")
-                if indexed_model and indexed_model != settings.embedding_model:
-                    raise IndexConfigError(
-                        f"Index uses {indexed_model}, configured model is {settings.embedding_model}"
-                    )
-                self._store, self._mtime_ns = store, mtime_ns
-                logger.info("Loaded index with %s records", len(store._records))
-            return self._store
+        if self._store is None or self._mtime_ns != mtime_ns:
+            self._store, self._mtime_ns = self._open(), mtime_ns
+        return self._store
 
 
-index_manager = IndexManager(INDEX)
+index_manager = IndexManager(
+    backend=settings.vector_backend,
+    index_path=INDEX,
+    milvus_uri=settings.milvus_uri,
+    milvus_collection=settings.milvus_collection,
+    milvus_metric=settings.milvus_metric,
+)
 
 
 def retrieve(question: str, top_k: int, principal: Principal):
@@ -87,16 +133,14 @@ def retrieve(question: str, top_k: int, principal: Principal):
     """
     store = index_manager.get()
 
-    def allowed(record) -> bool:
-        return record.get("group") in principal.allowed_groups
-
-    dense = store.similarity_search_with_relevance_scores(
-        question, k=top_k, score_threshold=settings.score_threshold, filter=allowed,
+    groups = principal.allowed_groups
+    dense = store.search(
+        question, k=top_k, groups=groups, score_threshold=settings.score_threshold
     )
     if not settings.hybrid_enabled:
         return dense
 
-    sparse = bm25_search(store, question, k=top_k, filter_fn=allowed)
+    sparse = bm25_search(store, question, k=top_k, groups=groups)
     if not sparse:
         return dense
 

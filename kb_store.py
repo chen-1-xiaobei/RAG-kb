@@ -219,6 +219,43 @@ class JSONVectorStore(VectorStore):
     def _select_relevance_score_fn(self) -> Callable[[float], float]:
         return _cosine_relevance
 
+    # ---------- VectorBackend 协议（retrieval 只依赖这三个方法） ----------
+
+    def search(
+        self,
+        query: str,
+        k: int,
+        groups: frozenset[str],
+        score_threshold: float | None = None,
+    ) -> list[tuple[Document, float]]:
+        """按组预过滤后检索，语义与 Milvus 后端逐条对齐。
+
+        与 `similarity_search_with_relevance_scores` 的关系：后者是全量点积 + 谓词过滤，
+        保留了 LangChain VectorStore 的通用能力；这里是检索层实际使用的窄接口。
+        两者都做预过滤，未授权记录不参与 top-k 竞争。
+        """
+        if not self._records or not groups:
+            return []
+        allowed = [i for i, r in enumerate(self._records) if r.get("group") in groups]
+        if not allowed:
+            return []
+        q = np.asarray(self._embedding.embed_query(query), dtype=np.float32)
+        q /= np.linalg.norm(q).clip(min=1e-12)
+        scores = self._vectors[allowed] @ q
+        results: list[tuple[Document, float]] = []
+        for position in np.argsort(scores)[::-1][: max(1, int(k))]:
+            score = max(0.0, float(scores[position]))
+            if score_threshold is not None and score < score_threshold:
+                continue
+            results.append((self._to_document(allowed[position]), score))
+        return results
+
+    def records(self) -> list[dict]:
+        return self._records
+
+    def count(self) -> int:
+        return len(self._records)
+
     def _to_document(self, i: int) -> Document:
         record = self._records[i]
         return Document(

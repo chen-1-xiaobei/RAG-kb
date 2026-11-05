@@ -47,12 +47,20 @@ class Settings:
     tool_default_top_k: int = int(os.getenv("TOOL_DEFAULT_TOP_K", "4"))
     # 工具给模型看的每条资料截断字符数（答案节点的证据不受影响）
     tool_text_truncate: int = int(os.getenv("TOOL_TEXT_TRUNCATE", "500"))
+    # 向量后端：milvus（默认）| json（离线兜底，评测与 CI 可用）
+    vector_backend: str = os.getenv("VECTOR_BACKEND", "milvus")
+    # Milvus 连接：本地文件即 Milvus Lite；填 http://host:19530 则连独立服务
+    milvus_uri: str = os.getenv("MILVUS_URI", "milvus.db")
+    milvus_collection: str = os.getenv("MILVUS_COLLECTION", "kb_chunks")
+    milvus_metric: str = os.getenv("MILVUS_METRIC", "COSINE")
 
     def validate(self) -> None:
         if not 0 <= self.score_threshold <= 1:
             raise ValueError("SCORE_THRESHOLD must be between 0 and 1")
         if self.auth_mode not in {"dev", "jwt"}:
             raise ValueError("AUTH_MODE must be 'dev' or 'jwt'")
+        if self.vector_backend not in {"json", "milvus"}:
+            raise ValueError("VECTOR_BACKEND must be 'json' or 'milvus'")
         if self.auth_mode == "jwt" and not self.jwt_secret:
             raise ValueError("JWT_SECRET is required when AUTH_MODE=jwt")
         for name in ("max_tool_rounds", "table_max_rows", "tool_top_k_max", "tool_text_truncate",

@@ -65,7 +65,7 @@ def test_rrf_respects_top_k():
 
 
 class _FakeStore:
-    """最小替身：只提供 bm25_search 需要的那几个属性。"""
+    """最小替身：只提供 bm25_search 需要的后端协议（records）。"""
 
     def __init__(self, texts, groups):
         self._records = [
@@ -73,12 +73,11 @@ class _FakeStore:
             for i, (text, group) in enumerate(zip(texts, groups))
         ]
 
-    def _to_document(self, index):
-        record = self._records[index]
-        return Document(
-            page_content=record["text"],
-            metadata={k: v for k, v in record.items() if k != "text"},
-        )
+    def records(self):
+        return self._records
+
+    def count(self):
+        return len(self._records)
 
 
 def test_bm25_search_respects_permission_filter():
@@ -87,13 +86,11 @@ def test_bm25_search_respects_permission_filter():
         ["住宿报销标准五百元", "住宿报销标准是财务内部规定"],
         ["public", "财务"],
     )
-    results = bm25_search(
-        store, "住宿报销标准", k=10, filter_fn=lambda r: r["group"] == "public"
-    )
+    results = bm25_search(store, "住宿报销标准", k=10, groups=frozenset({"public"}))
     assert [doc.metadata["group"] for doc, _ in results] == ["public"]
 
 
 def test_bm25_search_skips_zero_score_documents():
     store = _FakeStore(["报销流程", "考勤制度"], ["public", "public"])
-    results = bm25_search(store, "完全不相关", k=10, filter_fn=None)
+    results = bm25_search(store, "完全不相关", k=10, groups=None)
     assert results == []
