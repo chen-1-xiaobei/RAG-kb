@@ -1,0 +1,97 @@
+{
+  "configs": [
+    {
+      "workers": 1,
+      "threads": 8,
+      "ready": 1,
+      "levels": [
+        {
+          "concurrency": 1,
+          "requests": 1,
+          "failures": 0,
+          "qps": 0.233,
+          "p50_ms": 4289,
+          "max_ms": 4289
+        },
+        {
+          "concurrency": 4,
+          "requests": 4,
+          "failures": 0,
+          "qps": 0.384,
+          "p50_ms": 9526,
+          "max_ms": 10410
+        }
+      ]
+    },
+    {
+      "workers": 2,
+      "threads": 4,
+      "ready": 2,
+      "levels": [
+        {
+          "concurrency": 1,
+          "requests": 1,
+          "failures": 0,
+          "qps": 0.258,
+          "p50_ms": 3871,
+          "max_ms": 3871
+        },
+        {
+          "concurrency": 4,
+          "requests": 4,
+          "failures": 2,
+          "qps": 0.013,
+          "p50_ms": 153298,
+          "max_ms": 300037
+        }
+      ]
+    },
+    {
+      "workers": 2,
+      "threads": 8,
+      "ready": 2,
+      "levels": [
+        {
+          "concurrency": 1,
+          "requests": 1,
+          "failures": 0,
+          "qps": 0.156,
+          "p50_ms": 6402,
+          "max_ms": 6402
+        },
+        {
+          "concurrency": 4,
+          "requests": 4,
+          "failures": 2,
+          "qps": 0.013,
+          "p50_ms": 161620,
+          "max_ms": 300046
+        }
+      ]
+    },
+    {
+      "workers": 3,
+      "threads": 4,
+      "ready": 3,
+      "levels": [
+        {
+          "concurrency": 1,
+          "requests": 1,
+          "failures": 0,
+          "qps": 0.145,
+          "p50_ms": 6881,
+          "max_ms": 6881
+        },
+        {
+          "concurrency": 4,
+          "requests": 4,
+          "failures": 1,
+          "qps": 0.013,
+          "p50_ms": 30309,
+          "max_ms": 300019
+        }
+      ]
+    }
+  ],
+  "at": "2026-11-07T16:38:26"
+}

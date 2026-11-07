@@ -57,6 +57,18 @@ class Settings:
     milvus_uri: str = os.getenv("MILVUS_URI", "milvus.db")
     milvus_collection: str = os.getenv("MILVUS_COLLECTION", "kb_chunks")
     milvus_metric: str = os.getenv("MILVUS_METRIC", "COSINE")
+    # ---- 准入控制（admission.py）----
+    # 实测：1 进程 × 8 线程冷路径吞吐约 0.38 req/s、单请求 p50 约 9.5s。
+    # 并发在这里不是产能而是排队，所以默认只放 workers=1 个请求进入"贵的那一段"（精排），
+    # 其余在有界队列里等；队列满或等太久直接拒绝，而不是让所有人一起超时。
+    admission_enabled: bool = _bool_env("ADMISSION_ENABLED", True)
+    admission_workers: int = int(os.getenv("ADMISSION_WORKERS", "1"))
+    admission_queue_max: int = int(os.getenv("ADMISSION_QUEUE_MAX", "4"))
+    admission_queue_timeout: float = float(os.getenv("ADMISSION_QUEUE_TIMEOUT", "30"))
+    # 令牌桶默认关闭：速率必须按目标机器实测容量倒推（本机 0.38 req/s、服务器可能 3 req/s），
+    # 写死一个"看起来合理"的值（如 100/s）等于没做限流——它永远不会触发。
+    admission_rate: float = float(os.getenv("ADMISSION_RATE", "0"))
+    admission_burst: int = int(os.getenv("ADMISSION_BURST", "4"))
 
     def validate(self) -> None:
         if not 0 <= self.score_threshold <= 1:
@@ -67,6 +79,16 @@ class Settings:
             raise ValueError("VECTOR_BACKEND must be 'json' or 'milvus'")
         if self.auth_mode == "jwt" and not self.jwt_secret:
             raise ValueError("JWT_SECRET is required when AUTH_MODE=jwt")
+        if self.admission_workers < 1:
+            raise ValueError("ADMISSION_WORKERS must be >= 1")
+        if self.admission_queue_max < 0:
+            raise ValueError("ADMISSION_QUEUE_MAX must be >= 0")
+        if self.admission_queue_timeout <= 0:
+            raise ValueError("ADMISSION_QUEUE_TIMEOUT must be positive")
+        if self.admission_rate < 0:
+            raise ValueError("ADMISSION_RATE must be >= 0（0 表示不限流）")
+        if self.admission_burst < 1:
+            raise ValueError("ADMISSION_BURST must be >= 1")
         for name in ("max_tool_rounds", "table_max_rows", "tool_top_k_max", "tool_text_truncate",
                      "rerank_candidate_factor", "rerank_batch_size", "tool_default_top_k"):
             if getattr(self, name) <= 0:

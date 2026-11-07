@@ -25,6 +25,7 @@ from auth import Principal  # noqa: E402
 from config import settings  # noqa: E402
 from hybrid import bm25_search, rrf_fuse  # noqa: E402
 import obs  # noqa: E402
+from admission import AdmissionController  # noqa: E402
 from rerank import rerank  # noqa: E402
 from vector_backend import (  # noqa: E402
     BackendConfigError,
@@ -123,6 +124,40 @@ index_manager = IndexManager(
     milvus_metric=settings.milvus_metric,
 )
 
+# 准入控制：只包住精排（见 retrieve_ranked 的说明）。
+# workers=1 是实测最优（一个请求吃满 8 线程），queue_max 与 timeout 决定过载时
+# 是"快速失败"还是"一起超时"。
+admission_controller = AdmissionController(
+    workers=settings.admission_workers,
+    queue_max=settings.admission_queue_max,
+    queue_timeout=settings.admission_queue_timeout,
+    rate=settings.admission_rate,
+    burst=settings.admission_burst,
+)
+
+
+def admission_enabled() -> bool:
+    return settings.admission_enabled
+
+
+class _NullSlot:
+    """准入关闭时的空实现，避免调用点写 if/else。"""
+
+    def __enter__(self):
+        return None
+
+    def __exit__(self, *exc_info):
+        return False
+
+
+def admission_slot():
+    """取一个执行位：开启时排队，关闭时直接放行。
+
+    用一个函数而不是在调用点判断开关，是为了让"关闭准入"这条路径也走同一个
+    代码形状——否则"关掉准入"的行为从来没有被测试覆盖过。
+    """
+    return admission_controller.slot() if settings.admission_enabled else _NullSlot()
+
 
 def retrieve(question: str, top_k: int, principal: Principal):
     """粗排召回。
@@ -155,12 +190,21 @@ def candidate_k(top_k: int) -> int:
 
 
 def retrieve_ranked(question: str, top_k: int, principal: Principal):
-    """两段式检索：向量粗排召回候选 -> cross-encoder 精排过滤。"""
+    """两段式检索：向量粗排召回候选 -> cross-encoder 精排过滤。
+
+    精排是整条链路里唯一"贵"的阶段（单请求 p50 约 9.5 秒），因此只有它在准入控制的
+    闸门后面。**候选为空时直接返回，不取闸门**——否则一次 20ms 的拒答会被前面
+    10 秒的精排卡住，把快路径的 25 QPS 全部赔掉。
+    """
     started = perf_counter()
     candidates = retrieve(question, candidate_k(top_k), principal)
     coarse_ms = (perf_counter() - started) * 1000
     rerank_started = perf_counter()
-    hits = rerank(question, candidates, top_n=top_k, threshold=settings.rerank_threshold)
+    if candidates:
+        with admission_slot():
+            hits = rerank(question, candidates, top_n=top_k, threshold=settings.rerank_threshold)
+    else:
+        hits = []
     rerank_ms = (perf_counter() - rerank_started) * 1000
     obs.observe("rag_stage_seconds", coarse_ms / 1000, stage="coarse")
     obs.observe("rag_stage_seconds", rerank_ms / 1000, stage="rerank")

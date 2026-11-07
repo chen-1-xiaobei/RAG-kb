@@ -49,7 +49,14 @@ from conversation import (
     turn_pair,
 )
 from rerank import warmup as rerank_warmup
-from retrieval import IndexConfigError, embeddings, index_manager, retrieve_ranked
+from admission import AdmissionRejected
+from retrieval import (
+    IndexConfigError,
+    admission_controller,
+    embeddings,
+    index_manager,
+    retrieve_ranked,
+)
 from streaming import (
     EVENT_DONE,
     EVENT_ERROR,
@@ -420,6 +427,13 @@ def _persist(conversation: Conversation, question: str, response: AskResponse) -
         logger.warning("conversation_concurrent_append id=%s", conversation.conversation_id)
 
 
+ADMISSION_MESSAGES = {
+    "rate_limited": "请求过于频繁，请稍后重试",
+    "queue_full": "服务繁忙（排队已满），请稍后重试",
+    "queue_timeout": "服务繁忙（排队超时），请稍后重试",
+}
+
+
 @contextmanager
 def upstream_errors(action: str):
     """把请求期故障映射为明确的 503，而不是裸 500。
@@ -427,9 +441,27 @@ def upstream_errors(action: str):
     可预期的失败——索引缺失/不兼容、reranker 模型未下载（OSError）、
     LLM 不可达或结构化输出校验失败——返回可操作的提示；
     其余异常统一记录完整堆栈后返回 503，堆栈不泄漏给客户端。
+
+    准入拒绝单独处理：它**不是故障**，而是"压力已到上限"。
+    所以给出正确的状态码（429/503）、`Retry-After` 与原因码，
+    让客户端知道该退避而不是重试到底。
     """
     try:
         yield
+    except AdmissionRejected as exc:
+        obs.inc("rag_requests_total", status="rejected", endpoint=action)
+        logger.warning(
+            "admission_rejected reason=%s retry_after=%ds endpoint=%s",
+            exc.reason, exc.retry_after, action,
+        )
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={
+                "reason": exc.reason,
+                "message": ADMISSION_MESSAGES.get(exc.reason, "服务繁忙"),
+            },
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
     except HTTPException:
         obs.inc("rag_requests_total", status="error", endpoint=action)
         raise
@@ -542,7 +574,8 @@ def health():
     try:
         store = index_manager.get()
         return {"ok": True, "indexed": True, "auth_mode": settings.auth_mode,
-                "index": store.index_metadata}
+                "index": store.index_metadata,
+                "admission": admission_controller.snapshot()}
     except Exception as exc:
         return JSONResponse(
             status_code=503,

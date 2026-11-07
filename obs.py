@@ -108,6 +108,7 @@ _lock = threading.Lock()
 _counters: dict[tuple[str, LabelKey], float] = {}
 _summaries: dict[tuple[str, LabelKey], Deque[float]] = {}
 _summary_totals: dict[tuple[str, LabelKey], list[float]] = {}   # [count, sum]
+_gauges: dict[tuple[str, LabelKey], float] = {}
 
 WINDOW = 512          # 分位数只在最近这么多次观测上计算
 QUANTILES = (0.5, 0.95, 0.99)
@@ -131,6 +132,17 @@ def observe(name: str, value: float, **labels: str) -> None:
         totals = _summary_totals.setdefault(key, [0.0, 0.0])
         totals[0] += 1
         totals[1] += float(value)
+
+
+def set_gauge(name: str, value: float, **labels: str) -> None:
+    """设置瞬时值（如队列深度、正在执行数）。
+
+    与 `observe` 的区别：observe 累积分布（用来算分位数），gauge 只保留**最后一次**
+    写入的值——"当前队列里排了几个"没有分布可言，只有当前值。
+    """
+    key = (name, _label_key(labels))
+    with _lock:
+        _gauges[key] = float(value)
 
 
 def _quantile(sorted_values: list[float], q: float) -> float:
@@ -158,6 +170,7 @@ def render_prometheus() -> str:
         counters = dict(_counters)
         summaries = {key: list(window) for key, window in _summaries.items()}
         totals = {key: list(total) for key, total in _summary_totals.items()}
+        gauges = dict(_gauges)
 
     emitted: set[str] = set()
     for (name, labels), value in sorted(counters.items()):
@@ -180,6 +193,13 @@ def render_prometheus() -> str:
         lines.append(f"{name}_count{_render_labels(labels)} {count:g}")
         lines.append(f"{name}_sum{_render_labels(labels)} {total:.4f}")
 
+    emitted.clear()
+    for (name, labels), value in sorted(gauges.items()):
+        if name not in emitted:
+            lines.append(f"# TYPE {name} gauge")
+            emitted.add(name)
+        lines.append(f"{name}{_render_labels(labels)} {value:g}")
+
     return "\n".join(lines) + "\n"
 
 
@@ -189,3 +209,4 @@ def reset() -> None:
         _counters.clear()
         _summaries.clear()
         _summary_totals.clear()
+        _gauges.clear()

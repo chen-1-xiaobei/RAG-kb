@@ -39,6 +39,7 @@ from claims import (
     evaluate_policy,
     summarize,
 )
+from admission import AdmissionRejected
 from clarification import CLARIFY_TOOL_NAME, clarify_payload
 from config import settings
 from ingest import group_for  # 复用权限约定：data/ 根目录=public，data/<文件夹>/=组名
@@ -612,6 +613,11 @@ def execute_tools(state: dict, config: RunnableConfig | None = None) -> dict:
                 clarified = True
             else:
                 text, artifact = result
+        except AdmissionRejected:
+            # 准入拒绝不是"工具坏了"，而是"系统现在处理不过来"。
+            # 吞成工具错误会让过载静默变成一次拒答（200 + "无法确认"），
+            # 调用方与监控都看不到压力——所以必须让它穿出去，由端点翻成 503。
+            raise
         except Exception as exc:  # 参数校验失败等：错误文本给模型看，不阻断循环
             obs.inc("rag_tool_calls_total", tool=call["name"], status="error")
             logger.warning(
