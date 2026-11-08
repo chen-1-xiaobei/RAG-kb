@@ -25,7 +25,8 @@ from auth import Principal  # noqa: E402
 from config import settings  # noqa: E402
 from hybrid import bm25_search, rrf_fuse  # noqa: E402
 import obs  # noqa: E402
-from admission import AdmissionController  # noqa: E402
+from admission import AdmissionController
+from device import resolve  # noqa: E402
 from rerank import rerank  # noqa: E402
 from vector_backend import (  # noqa: E402
     BackendConfigError,
@@ -46,10 +47,12 @@ class IndexConfigError(RuntimeError):
     """索引文件与当前配置/代码不兼容（schema 版本、向量维度或 embedding 模型不一致）。"""
 
 
+_EMBEDDING_DEVICE = resolve(settings.embedding_device)
 embeddings = HuggingFaceEmbeddings(
     model_name=settings.embedding_model,
     encode_kwargs={"normalize_embeddings": True},
     query_encode_kwargs={"prompt": QUERY_INSTRUCTION},
+    model_kwargs={"device": _EMBEDDING_DEVICE},
 )
 
 
@@ -192,22 +195,34 @@ def candidate_k(top_k: int) -> int:
 def retrieve_ranked(question: str, top_k: int, principal: Principal):
     """两段式检索：向量粗排召回候选 -> cross-encoder 精排过滤。
 
-    精排是整条链路里唯一"贵"的阶段（单请求 p50 约 9.5 秒），因此只有它在准入控制的
-    闸门后面。**候选为空时直接返回，不取闸门**——否则一次 20ms 的拒答会被前面
-    10 秒的精排卡住，把快路径的 25 QPS 全部赔掉。
+    精排是整条链路里唯一"贵"的阶段，因此只有它在准入控制的闸门后面。
+    **候选为空时直接返回，不取闸门**——否则一次 20ms 的拒答会被前面正在跑的
+    精排卡住，把快路径的吞吐全部赔掉。
+
+    计时分两段：`admission_wait` 是排队等待，`stage=rerank` 才是真正的计算。
+    早先把两者算在一起，导致换了 GPU 之后指标仍报"精排 3.3 秒"——而实测计算
+    只要 0.2 秒，其余全是排队。**把排队算进计算，会让"优化有没有效"完全不可判断。**
     """
     started = perf_counter()
     candidates = retrieve(question, candidate_k(top_k), principal)
     coarse_ms = (perf_counter() - started) * 1000
-    rerank_started = perf_counter()
+
+    rerank_ms = 0.0
+    wait_ms = 0.0
     if candidates:
+        entered = perf_counter()
         with admission_slot():
+            wait_ms = (perf_counter() - entered) * 1000
+            rerank_started = perf_counter()
             hits = rerank(question, candidates, top_n=top_k, threshold=settings.rerank_threshold)
+            rerank_ms = (perf_counter() - rerank_started) * 1000
     else:
         hits = []
-    rerank_ms = (perf_counter() - rerank_started) * 1000
+
     obs.observe("rag_stage_seconds", coarse_ms / 1000, stage="coarse")
     obs.observe("rag_stage_seconds", rerank_ms / 1000, stage="rerank")
+    if wait_ms:
+        obs.observe("rag_stage_seconds", wait_ms / 1000, stage="admission_wait")
     obs.inc("rag_retrieval_hits_total", amount=len(hits))
     logger.info(
         "retrieve top_k=%d candidates=%d hits=%d coarse_ms=%d rerank_ms=%d",

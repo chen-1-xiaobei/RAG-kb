@@ -19,6 +19,7 @@ from langchain_core.documents import Document
 from sentence_transformers import CrossEncoder
 
 from config import settings
+from device import resolve
 import obs
 
 logger = logging.getLogger("rag-kb")
@@ -37,13 +38,41 @@ def get_model() -> CrossEncoder:
 
     加锁是必要的：FastAPI 把同步端点丢进线程池，首个并发请求会同时进入这里，
     无锁时两个线程各加载一份 2GB 模型，显存/内存直接翻倍。
+
+    设备由 `RERANK_DEVICE` 决定（默认 auto：有 CUDA 用 GPU，否则 CPU）。
+    GPU 与 CPU 的 logit 有 1e-3 级差异，而阈值 0.05 踩在边界上——换设备必须重跑评测。
     """
     global _model
     if _model is None:
         with _model_lock:
             if _model is None:
-                _model = CrossEncoder(settings.rerank_model)
+                device = resolve(settings.rerank_device)
+                _model = CrossEncoder(settings.rerank_model, device=device)
+                if settings.rerank_fp16 and device == "cuda":
+                    # fp16 只在 GPU 上有意义：显存减半、通常更快，但数值差异更大
+                    _model.model.half()
+                logger.info(
+                    "rerank_model_loaded model=%s device=%s fp16=%s",
+                    settings.rerank_model, device,
+                    bool(settings.rerank_fp16 and device == "cuda"),
+                )
     return _model
+
+
+def effective_batch_size() -> int:
+    """实际批大小。配置为 0 时按设备自动选择。
+
+    这个默认值必须随设备变，因为结论是**反的**：
+
+    - CPU：批量越大越慢（每对 0.6s → 1.4s）。切批让单次推理更小、缓存更友好。
+    - GPU：批量越大越快（8 对 0.204s vs batch=2 时 5 次小 kernel）。
+      实测并发 4 时 batch=8 达 0.90 QPS，batch=2 只有 0.41 QPS。
+
+    同一段代码在两种设备上最优点相反，所以批大小不能只有一个常数默认值。
+    """
+    if settings.rerank_batch_size > 0:
+        return settings.rerank_batch_size
+    return 8 if resolve(settings.rerank_device) == "cuda" else 2
 
 
 def _key(question: str, doc: Document) -> str:
@@ -113,7 +142,7 @@ def rerank(
     if missing:
         fresh = get_model().predict(
             [model_pairs[index] for index in missing],
-            batch_size=settings.rerank_batch_size,
+            batch_size=effective_batch_size(),
         )
         fresh = [float(score) for score in fresh]
         for index, score in zip(missing, fresh):
@@ -134,5 +163,11 @@ def rerank(
 
 
 def warmup() -> None:
-    """加载并预热模型（lifespan 调用，避免首个请求慢）。"""
-    get_model().predict([("预热", "预热")], batch_size=1)
+    """加载并预热模型（lifespan 调用，避免首个请求慢）。
+
+    **必须用真实的批大小预热**：CUDA kernel 按 shape 选择/编译，用 1 对预热后，
+    首次真实请求（batch=8）仍要再付一次预热成本。实测在 GPU 上表现为
+    第一个冷请求精排 1.29s、之后的请求 0.20s——差 6 倍，看起来像"GPU 没用"。
+    """
+    batch = effective_batch_size()
+    get_model().predict([("预热", "预热")] * batch, batch_size=batch)

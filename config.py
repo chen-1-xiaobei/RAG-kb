@@ -31,10 +31,13 @@ class Settings:
     # **没有可测量的收益，因此默认关闭**，代码保留为开关：
     # 语料显著变大（数千 chunk）或换更弱的精排模型时，值得用同一套评测重测一次。
     hybrid_enabled: bool = os.getenv("HYBRID_ENABLED", "0") not in {"0", "false", "False"}
-    # 精排批大小：实测本机（i5-13420H 纯 CPU）批量越大反而越慢——每对耗时
-    # batch=1/2 约 0.6s、8 约 0.85s、16 约 1.4s；故默认小批量。
-    # 换硬件/换模型后建议重测（方法见 README「精排延迟」段）。
-    rerank_batch_size: int = int(os.getenv("RERANK_BATCH_SIZE", "2"))
+    # 精排批大小：0 = 按设备自动（CPU 用 2、GPU 用 8）。
+    # **结论在两种设备上是相反的**：
+    #   CPU（i5-13420H）：批量越大越慢——每对 batch=1/2 约 0.6s、8 约 0.85s、16 约 1.4s
+    #   GPU（RTX 3050）：批量越大越快——8 对 batch=8 约 0.20s；
+    #     实测并发 4 时 batch=8 达 0.90 QPS，batch=2 只有 0.41 QPS
+    # 所以默认值不能是一个常数，见 rerank.effective_batch_size()。
+    rerank_batch_size: int = int(os.getenv("RERANK_BATCH_SIZE", "0"))
     # Agent 工具循环：最多执行工具的轮数，超过强制进答案节点（无证据则拒答）
     max_tool_rounds: int = int(os.getenv("MAX_TOOL_ROUNDS", "3"))
     # 表格工具单次返回行数上限（超出截断并提示）
@@ -69,6 +72,13 @@ class Settings:
     # 写死一个"看起来合理"的值（如 100/s）等于没做限流——它永远不会触发。
     admission_rate: float = float(os.getenv("ADMISSION_RATE", "0"))
     admission_burst: int = int(os.getenv("ADMISSION_BURST", "4"))
+    # ---- 推理设备 ----
+    # auto = 有 CUDA 就用 GPU，否则 CPU。CI（无 GPU）与笔记本共用同一份代码。
+    # 注意：换设备后 logit 有 1e-3 级差异，而阈值 0.05 踩在边界上——必须重跑评测。
+    rerank_device: str = os.getenv("RERANK_DEVICE", "auto")
+    embedding_device: str = os.getenv("EMBEDDING_DEVICE", "auto")
+    # 精排用 fp16（仅 GPU 有效）：显存减半、通常更快，数值差异更大，需评测确认
+    rerank_fp16: bool = _bool_env("RERANK_FP16", False)
 
     def validate(self) -> None:
         if not 0 <= self.score_threshold <= 1:
@@ -77,6 +87,9 @@ class Settings:
             raise ValueError("AUTH_MODE must be 'dev' or 'jwt'")
         if self.vector_backend not in {"json", "milvus"}:
             raise ValueError("VECTOR_BACKEND must be 'json' or 'milvus'")
+        for name in ("rerank_device", "embedding_device"):
+            if getattr(self, name) not in {"auto", "cpu", "cuda"}:
+                raise ValueError(f"{name.upper()} must be 'auto', 'cpu' or 'cuda'")
         if self.auth_mode == "jwt" and not self.jwt_secret:
             raise ValueError("JWT_SECRET is required when AUTH_MODE=jwt")
         if self.admission_workers < 1:
@@ -90,9 +103,11 @@ class Settings:
         if self.admission_burst < 1:
             raise ValueError("ADMISSION_BURST must be >= 1")
         for name in ("max_tool_rounds", "table_max_rows", "tool_top_k_max", "tool_text_truncate",
-                     "rerank_candidate_factor", "rerank_batch_size", "tool_default_top_k"):
+                     "rerank_candidate_factor", "tool_default_top_k"):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name.upper()} must be positive")
+        if self.rerank_batch_size < 0:
+            raise ValueError("RERANK_BATCH_SIZE must be >= 0（0 表示按设备自动选择）")
         if self.tool_default_top_k > self.tool_top_k_max:
             raise ValueError("TOOL_DEFAULT_TOP_K must not exceed TOOL_TOP_K_MAX")
 

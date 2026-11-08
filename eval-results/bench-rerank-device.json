@@ -1,0 +1,34 @@
+[
+  {
+    "device": "cpu",
+    "batch_size": 2,
+    "pairs": 8,
+    "median_ms": 7199,
+    "per_pair_ms": 900,
+    "vram_mb": null
+  },
+  {
+    "device": "cpu",
+    "batch_size": 8,
+    "pairs": 8,
+    "median_ms": 9490,
+    "per_pair_ms": 1186,
+    "vram_mb": null
+  },
+  {
+    "device": "cuda",
+    "batch_size": 2,
+    "pairs": 8,
+    "median_ms": 204,
+    "per_pair_ms": 25,
+    "vram_mb": 2280
+  },
+  {
+    "device": "cuda",
+    "batch_size": 8,
+    "pairs": 8,
+    "median_ms": 218,
+    "per_pair_ms": 27,
+    "vram_mb": 2315
+  }
+]

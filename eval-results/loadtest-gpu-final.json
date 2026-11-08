@@ -1,0 +1,112 @@
+{
+  "base_url": "http://127.0.0.1:8020",
+  "phases": {
+    "refusal_fast": [
+      {
+        "concurrency": 1,
+        "requests": 1,
+        "failures": 0,
+        "wall_seconds": 0.0,
+        "qps": 22.31,
+        "p50_ms": 45.0,
+        "p95_ms": 45.0,
+        "max_ms": 45.0,
+        "server_stage_avg_s": {
+          "rag_latency_seconds[endpoint=\"ask\",stage=\"total\"]": 0.614,
+          "rag_stage_seconds[stage=\"admission_wait\"]": 0.0,
+          "rag_stage_seconds[stage=\"coarse\"]": 0.019,
+          "rag_stage_seconds[stage=\"rerank\"]": 0.576
+        }
+      }
+    ],
+    "retrieval_warm": [
+      {
+        "concurrency": 1,
+        "requests": 1,
+        "failures": 0,
+        "wall_seconds": 1.4,
+        "qps": 0.71,
+        "p50_ms": 1405.0,
+        "p95_ms": 1405.0,
+        "max_ms": 1405.0,
+        "server_stage_avg_s": {
+          "rag_latency_seconds[endpoint=\"ask\",stage=\"total\"]": 2.415,
+          "rag_stage_seconds[stage=\"admission_wait\"]": 0.0,
+          "rag_stage_seconds[stage=\"coarse\"]": 0.019,
+          "rag_stage_seconds[stage=\"rerank\"]": 0.158
+        }
+      }
+    ],
+    "retrieval_cold": [
+      {
+        "concurrency": 1,
+        "requests": 1,
+        "failures": 0,
+        "wall_seconds": 2.4,
+        "qps": 0.42,
+        "p50_ms": 2368.0,
+        "p95_ms": 2368.0,
+        "max_ms": 2368.0,
+        "server_stage_avg_s": {
+          "rag_latency_seconds[endpoint=\"ask\",stage=\"total\"]": 2.361,
+          "rag_stage_seconds[stage=\"admission_wait\"]": 0.0,
+          "rag_stage_seconds[stage=\"coarse\"]": 0.025,
+          "rag_stage_seconds[stage=\"rerank\"]": 1.23
+        }
+      },
+      {
+        "concurrency": 4,
+        "requests": 4,
+        "failures": 0,
+        "wall_seconds": 4.0,
+        "qps": 1.0,
+        "p50_ms": 3641.0,
+        "p95_ms": 4015.0,
+        "max_ms": 4015.0,
+        "server_stage_avg_s": {
+          "admission_wait_seconds[]": 2.246,
+          "rag_latency_seconds[endpoint=\"ask\",stage=\"total\"]": 3.067,
+          "rag_stage_seconds[stage=\"admission_wait\"]": 0.562,
+          "rag_stage_seconds[stage=\"coarse\"]": 0.047,
+          "rag_stage_seconds[stage=\"rerank\"]": 1.446
+        }
+      },
+      {
+        "concurrency": 8,
+        "requests": 8,
+        "failures": 0,
+        "wall_seconds": 6.7,
+        "qps": 1.2,
+        "p50_ms": 2836.0,
+        "p95_ms": 6686.0,
+        "max_ms": 6686.0,
+        "server_stage_avg_s": {
+          "admission_wait_seconds[]": 3.031,
+          "rag_latency_seconds[endpoint=\"ask\",stage=\"total\"]": 3.292,
+          "rag_stage_seconds[stage=\"admission_wait\"]": 1.137,
+          "rag_stage_seconds[stage=\"coarse\"]": 0.083,
+          "rag_stage_seconds[stage=\"rerank\"]": 1.154
+        }
+      }
+    ],
+    "agent": [
+      {
+        "concurrency": 1,
+        "requests": 1,
+        "failures": 0,
+        "wall_seconds": 4.2,
+        "qps": 0.24,
+        "p50_ms": 4245.0,
+        "p95_ms": 4245.0,
+        "max_ms": 4245.0,
+        "server_stage_avg_s": {
+          "rag_agent_rounds[endpoint=\"agent\"]": 1.0,
+          "rag_latency_seconds[endpoint=\"agent\",stage=\"total\"]": 4.338,
+          "rag_stage_seconds[stage=\"admission_wait\"]": 0.0,
+          "rag_stage_seconds[stage=\"coarse\"]": 0.02,
+          "rag_stage_seconds[stage=\"rerank\"]": 0.211
+        }
+      }
+    ]
+  }
+}
