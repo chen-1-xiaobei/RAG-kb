@@ -114,6 +114,7 @@ def make_search_tool(
 
         参数 question 为检索查询（可重述用户问题以提高召回）。
         参数 top_k 为返回条数：**默认即可，调大不会有更多结果，调小可加快响应**。
+        一次没有命中可以换关键词再试；仍然查不到就停止调用，说明资料缺失。
         """
         return search_impl(
             question, clamp_top_k(top_k, default_top_k), principal, search_fn, max_top_k, truncate
