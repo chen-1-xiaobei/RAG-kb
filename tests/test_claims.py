@@ -74,7 +74,12 @@ def test_policy_requires_nights_and_tier_for_lodging():
 
 def test_policy_rejects_unknown_category_and_non_positive_amount():
     assert evaluate_policy(Claim(category="赌博", amount=10.0))[0]
-    assert evaluate_policy(Claim(category="餐饮补贴", amount=0))[0]
+    # 金额 <= 0 现在会被 Claim 的 schema 先拒（见 tests/test_claim_schema.py）。
+    # 这里用 model_construct 模拟"schema 被绕过"的情形（例如从库里读到脏数据），
+    # 断言政策层**仍然**拦得住——两层都要守，而不是靠其中一层。
+    dirty = Claim.model_construct(category="餐饮补贴", amount=0, nights=0,
+                                 city_tier="", invoice_ids=())
+    assert evaluate_policy(dirty)[0]
 
 
 def test_policy_flags_dual_sign_above_threshold():

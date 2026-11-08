@@ -20,7 +20,10 @@ import secrets
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 # ---------- 结果码 ----------
 PROPOSED = "proposed"
@@ -49,14 +52,158 @@ def new_proposal_id() -> str:
 # 数据模型
 # ---------------------------------------------------------------------------
 
-@dataclass(frozen=True)
-class Claim:
-    """一条报销诉求。金额单位元。"""
-    category: str
-    amount: float
-    nights: int = 0
-    city_tier: str = ""
-    invoice_ids: tuple[str, ...] = ()
+MAX_CLAIM_AMOUNT = 1_000_000.0   # 单笔上限：纯粹防离谱输入，业务上限由政策判定
+MAX_NIGHTS = 366
+MAX_INVOICES = 20
+MAX_INVOICE_LEN = 64
+
+# 模型会把说法写活（"住宿费""打车""机票"），这里做**受控**归一并保留未知值：
+# 归一表之外的词原样保留，交给 evaluate_policy 判成"未知类别"，
+# 这样"类型校验"和"业务规则"不会混在一起。
+CATEGORY_ALIASES = {
+    "住宿费": "住宿", "住宿": "住宿",
+    "市内交通费": "市内交通", "市内交通": "市内交通", "打车": "市内交通", "出租车": "市内交通",
+    "餐饮补贴": "餐饮补贴", "餐补": "餐饮补贴", "饭补": "餐饮补贴",
+    "高铁": "高铁", "高铁票": "高铁", "火车票": "高铁",
+    "飞机": "飞机", "机票": "飞机",
+}
+CITY_TIER_ALIASES = {
+    "一线": "一线", "一线城市": "一线",
+    "北京": "一线", "上海": "一线", "广州": "一线", "深圳": "一线",
+    "其他": "其他", "二线": "其他", "其他城市": "其他",
+}
+
+_CURRENCY_NOISE = str.maketrans("", "", " ,，¥￥元人民币")
+
+
+class ClaimValidationError(ValueError):
+    """入参不合法（类型 / 范围 / 格式）。
+
+    与 `REJECTED_BY_POLICY` 刻意区分：那是"数据合规但不符合公司政策"，
+    这是"模型给的东西根本没法解析"。两者对用户的话术不同，混一起会误导排查。
+    """
+
+
+def _to_finite_amount(value: object) -> float:
+    """把模型给的金额转成有限的 float，拒绝 bool / NaN / Inf / 空串。
+
+    bool 必须显式拒绝：Python 里 `float(True) == 1.0`，模型偶尔会传
+    `amount=true`，静默变成 1 块钱比报错难查得多。
+    """
+    if isinstance(value, bool):
+        raise ValueError("金额必须是数字，不能是布尔值")
+    if isinstance(value, (int, float)):
+        number = Decimal(str(value))
+    elif isinstance(value, str):
+        cleaned = value.translate(_CURRENCY_NOISE).strip()
+        if not cleaned:
+            raise ValueError("金额不能为空")
+        try:
+            number = Decimal(cleaned)
+        except InvalidOperation as exc:
+            raise ValueError(f"金额无法解析为数字：{value!r}") from exc
+    else:
+        raise ValueError(f"金额必须是数字，收到 {type(value).__name__}")
+    if not number.is_finite():
+        raise ValueError("金额必须是有限数字（不接受 NaN / Infinity）")
+    return float(number.quantize(Decimal("0.01")))
+
+
+def _to_nights(value: object) -> int:
+    if isinstance(value, bool):
+        raise ValueError("晚数必须是非负整数，不能是布尔值")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if not value.is_integer():
+            raise ValueError(f"晚数必须是整数，收到 {value}")
+        return int(value)
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            return 0
+        if not cleaned.isdigit():
+            raise ValueError(f"晚数必须是整数，收到 {value!r}")
+        return int(cleaned)
+    raise ValueError(f"晚数必须是整数，收到 {type(value).__name__}")
+
+
+def _to_invoice_ids(value: object) -> tuple[str, ...]:
+    """接受列表或 "FP-1, FP-2" 这类字符串；去空白、去重、限制条数与长度。"""
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        raw = [piece for piece in value.replace("，", ",").replace("、", ",").split(",")]
+    elif isinstance(value, (list, tuple, set)):
+        raw = list(value)
+    else:
+        raise ValueError(f"发票号必须是列表或字符串，收到 {type(value).__name__}")
+
+    cleaned: list[str] = []
+    for item in raw:
+        if not isinstance(item, str):
+            raise ValueError("发票号必须是字符串")
+        token = item.strip()
+        if not token:
+            continue
+        if len(token) > MAX_INVOICE_LEN:
+            raise ValueError(f"发票号过长（最多 {MAX_INVOICE_LEN} 字符）")
+        if token not in cleaned:            # 去重但保留顺序
+            cleaned.append(token)
+    if len(cleaned) > MAX_INVOICES:
+        raise ValueError(f"一次最多 {MAX_INVOICES} 张发票")
+    return tuple(cleaned)
+
+
+class Claim(BaseModel):
+    """一条报销诉求。金额单位元。
+
+    用 pydantic 而不是 dataclass 的理由：**入参来自模型**，它会把 `"450"`、`true`、
+    `NaN`、`"450元"`、`"FP-1, FP-2"` 这些形态混着给你。dataclass 只能靠裸
+    `float()` / `int()`，`float(True)` 会静默变成 1.0。
+    这里把"能安全归一化的归一化、归不了的明确报错"做成模型的一部分。
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", str_strip_whitespace=True)
+
+    category: str = Field(min_length=1, max_length=32)
+    amount: float = Field(gt=0, le=MAX_CLAIM_AMOUNT, allow_inf_nan=False)
+    nights: int = Field(default=0, ge=0, le=MAX_NIGHTS)
+    city_tier: str = Field(default="", max_length=16)
+    invoice_ids: tuple[str, ...] = Field(default=())
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def _normalize_category(cls, value: object) -> object:
+        if isinstance(value, str):
+            key = value.strip()
+            return CATEGORY_ALIASES.get(key, key)
+        return value
+
+    @field_validator("amount", mode="before")
+    @classmethod
+    def _normalize_amount(cls, value: object) -> object:
+        return _to_finite_amount(value)
+
+    @field_validator("nights", mode="before")
+    @classmethod
+    def _normalize_nights(cls, value: object) -> object:
+        return _to_nights(value)
+
+    @field_validator("city_tier", mode="before")
+    @classmethod
+    def _normalize_city_tier(cls, value: object) -> object:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            key = value.strip()
+            return CITY_TIER_ALIASES.get(key, key)
+        return value
+
+    @field_validator("invoice_ids", mode="before")
+    @classmethod
+    def _normalize_invoice_ids(cls, value: object) -> object:
+        return _to_invoice_ids(value)
 
     def as_dict(self) -> dict:
         return {
@@ -66,6 +213,23 @@ class Claim:
             "city_tier": self.city_tier,
             "invoice_ids": list(self.invoice_ids),
         }
+
+
+def parse_claim(**fields: object) -> Claim:
+    """把模型给的原始参数安全地变成 Claim；失败时抛可读的 ClaimValidationError。
+
+    错误文案会被直接回给模型（再由它转述给用户），所以按字段名 + 原值写清楚，
+    例如「amount: 金额必须是数字，不能是布尔值」。
+    """
+    try:
+        return Claim(**fields)
+    except ValidationError as exc:
+        problems = []
+        for error in exc.errors():
+            field = str(error["loc"][0]) if error["loc"] else "参数"
+            message = error["msg"].removeprefix("Value error, ")
+            problems.append(f"{field}: {message}")
+        raise ClaimValidationError("；".join(problems)) from exc
 
 
 @dataclass(frozen=True)

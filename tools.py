@@ -36,7 +36,9 @@ from claims import (
     Claim,
     ClaimEvent,
     ClaimStore,
+    ClaimValidationError,
     evaluate_policy,
+    parse_claim,
     summarize,
 )
 from admission import AdmissionRejected
@@ -458,13 +460,20 @@ def make_propose_claim_tool(principal: Principal, conversation_id: str, store: C
         **信息不全也要调用**：策略校验会把缺哪一项明确返回（例如"住宿属于凭票报销，必须提供发票"），
         你再把缺项告诉用户补充；不要因为缺项就放弃提案、改去解释制度。
         """
-        claim = Claim(
-            category=category,
-            amount=float(amount),
-            nights=int(nights or 0),
-            city_tier=city_tier or "",
-            invoice_ids=tuple(invoice_ids or ()),
-        )
+        try:
+            claim = parse_claim(
+                category=category,
+                amount=amount,
+                nights=nights or 0,
+                city_tier=city_tier or "",
+                invoice_ids=invoice_ids,
+            )
+        except ClaimValidationError as exc:
+            # 入参不合法与"不符合政策"是两件事，但对用户而言下一步一样：修正后再试。
+            # 走同一条 rejected_by_policy 通道，避免新增结果码把渲染分支撑开。
+            message = f"参数不合法：{exc}"
+            event = ClaimEvent("propose", REJECTED_BY_POLICY, "", None, (message,))
+            return f"{message}。请修正后重新发起提案。", [event]
         return propose_claim_impl(claim, principal, conversation_id, store)
 
     return propose_expense_claim

@@ -1,12 +1,11 @@
 {
-  "label": "slim",
+  "label": "schema",
   "prompt_chars": 279,
   "results": {
     "制度问答-应检索": {
       "question": "报销单要在费用发生后多久内提交？",
       "observed": {
         "tools": [
-          "search_knowledge_base",
           "search_knowledge_base"
         ],
         "answer": "根据资料，员工应在费用发生后三十天内在 OA 系统填写报销单，并上传发票原件照片。[1]",
@@ -37,7 +36,7 @@
         "tools": [
           "propose_expense_claim"
         ],
-        "answer": "提案 p_MWlUlOL4IUTe3-xW：住宿报销 450.00 元，一线城市 1 晚，1 张发票 请确认后回复「确认提交」。",
+        "answer": "提案 p_LF4WBMWCkb-_eBpW：住宿报销 450.00 元，一线城市 1 晚，1 张发票 请确认后回复「确认提交」。",
         "insufficient": false,
         "claim_result": "proposed",
         "proposal_id": true
@@ -48,7 +47,8 @@
       "question": "帮我报销 450 元住宿费",
       "observed": {
         "tools": [
-          "propose_expense_claim"
+          "propose_expense_claim",
+          "search_knowledge_base"
         ],
         "answer": "这次还不能发起提案，需要先补充以下信息：   1. 住宿属于凭票报销，必须提供发票   2. 住宿报销必须提供晚数   3. 住宿报销必须说明城市类型（一线 / 其他） 补充后请再说一次（例如「住宿 450 元，1 晚，一线城市，发票号 F",
         "insufficient": false,
@@ -63,7 +63,7 @@
         "tools": [
           "commit_expense_claim"
         ],
-        "answer": "提案 p_MWlUlOL4IUTe3-xW：住宿报销 450.00 元，一线城市 1 晚，1 张发票 已提交，等待审批。",
+        "answer": "提案 p_LF4WBMWCkb-_eBpW：住宿报销 450.00 元，一线城市 1 晚，1 张发票 已提交，等待审批。",
         "insufficient": false,
         "claim_result": "submitted",
         "proposal_id": true
@@ -76,7 +76,7 @@
         "tools": [
           "commit_expense_claim"
         ],
-        "answer": "该报销申请已经提交过了（提案 p_MWlUlOL4IUTe3-xW），无需重复提交。",
+        "answer": "该报销申请已经提交过了（提案 p_LF4WBMWCkb-_eBpW），无需重复提交。",
         "insufficient": false,
         "claim_result": "already_submitted",
         "proposal_id": true

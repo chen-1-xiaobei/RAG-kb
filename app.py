@@ -27,7 +27,7 @@ from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
 from langchain_deepseek import ChatDeepSeek
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import MutableHeaders
 
@@ -146,6 +146,10 @@ table_registry = TableRegistry(DATA)
 
 
 class AskRequest(BaseModel):
+    # extra="forbid"：未知字段直接 422，而不是被静默忽略。
+    # 静默忽略会把"字段名拼错"（topk / topK）变成"参数没生效"，排查时最费时间。
+    model_config = ConfigDict(extra="forbid")
+
     question: str = Field(min_length=2, max_length=1000)
     top_k: int = Field(default=4, ge=1, le=8)
     # 传入上一轮响应返回的会话 ID 即可续话；None 表示新会话。
