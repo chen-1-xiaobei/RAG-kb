@@ -451,6 +451,11 @@ def make_propose_claim_tool(principal: Principal, conversation_id: str, store: C
         参数 category：住宿 / 市内交通 / 餐饮补贴 / 高铁 / 飞机。
         参数 amount：申请总金额（元）。nights 与 city_tier 仅在 category=住宿 时必填，
         city_tier 取「一线」或「其他」。invoice_ids 为发票编号，除餐饮补贴外必填。
+
+        **何时调用**：用户表达报销意图时（"帮我报销""我要报 450 元住宿费"）就调用本工具，
+        不要先用检索或查表回答——那样用户拿不到提案卡片。
+        **信息不全也要调用**：策略校验会把缺哪一项明确返回（例如"住宿属于凭票报销，必须提供发票"），
+        你再把缺项告诉用户补充；不要因为缺项就放弃提案、改去解释制度。
         """
         claim = Claim(
             category=category,

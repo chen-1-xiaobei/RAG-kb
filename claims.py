@@ -292,9 +292,13 @@ def render(event: ClaimEvent) -> tuple[str, bool, dict]:
     模型无法在确认文案里改动任何一个数字。
     """
     if event.result == REJECTED_BY_POLICY:
-        detail = "；".join(event.violations) or "不符合报销政策"
+        # 文案目标：让用户知道"下一步该做什么"，而不是一句"无法提交"。
+        # 缺项在语义上确实是拒绝（不生成提案号），但对用户而言是"还差这些信息"。
+        items = list(event.violations) or ["不符合报销政策"]
+        listed = "\n".join(f"  {index}. {item}" for index, item in enumerate(items, 1))
         return (
-            f"该报销申请无法提交：{detail}。",
+            f"这次还不能发起提案，需要先补充以下信息：\n{listed}\n"
+            f"补充后请再说一次（例如「住宿 450 元，1 晚，一线城市，发票号 FP-2026-001」），我再为您发起提案。",
             False,
             {"proposal_id": "", "action": event.action, "result": event.result,
              "summary": "", "amount": None, "needs_dual_sign": False,
