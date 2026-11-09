@@ -87,6 +87,10 @@ class Settings:
     llm_price_input_per_million: float = float(os.getenv("LLM_PRICE_INPUT_PER_MILLION", "0"))
     llm_price_output_per_million: float = float(os.getenv("LLM_PRICE_OUTPUT_PER_MILLION", "0"))
     llm_price_currency: str = os.getenv("LLM_PRICE_CURRENCY", "CNY")
+    # ---- 报销提案存储 ----
+    # 空 = 用本地 SQLite（默认，行为与迁移前一致）；填 mysql://user:pass@host:port/db 则走 MySQL。
+    # 迁移分期进行：第一期只切这一层，会话与 checkpoint 仍是 SQLite。
+    claim_store_url: str = os.getenv("CLAIM_STORE_URL", "")
 
     def validate(self) -> None:
         if not 0 <= self.score_threshold <= 1:
@@ -110,6 +114,10 @@ class Settings:
             raise ValueError("ADMISSION_RATE must be >= 0（0 表示不限流）")
         if self.admission_burst < 1:
             raise ValueError("ADMISSION_BURST must be >= 1")
+        if self.claim_store_url and not self.claim_store_url.startswith(
+            ("mysql://", "mysql+pymysql://")
+        ):
+            raise ValueError("CLAIM_STORE_URL 只支持 mysql:// 或留空（留空=SQLite）")
         for name in ("max_tool_rounds", "table_max_rows", "tool_top_k_max", "tool_text_truncate",
                      "rerank_candidate_factor", "tool_default_top_k"):
             if getattr(self, name) <= 0:

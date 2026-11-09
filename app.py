@@ -38,6 +38,7 @@ from checkpointing import build_checkpointer, latest_thread, trace_steps, turn_t
 import obs
 from llm_usage import record_usage
 from claims import ClaimStore, render
+from mysql_claims import open_claim_store
 from clarification import REFUSAL_TEXT, decide
 from config import settings
 from conversation import (
@@ -371,7 +372,9 @@ def graph_config(conversation: Conversation | None, tools: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 conversation_store = ConversationStore(ROOT / "conversations.db")
-claim_store = ClaimStore(ROOT / "claims.db")
+# 报销提案存储：CLAIM_STORE_URL 以 mysql:// 开头则走 MySQL，否则用本地 SQLite。
+# 默认留空 → 行为与迁移前完全一致；开 MySQL 只需一个环境变量。
+claim_store = open_claim_store(settings.claim_store_url, ROOT / "claims.db")
 
 
 def _authorize(req: AskRequest, principal: Principal) -> Conversation:

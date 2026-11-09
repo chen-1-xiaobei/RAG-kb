@@ -1,4 +1,4 @@
-fastapi>=0.115.0
+﻿fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 pypdf>=5.0.0
 python-dotenv>=1.0.1
@@ -26,3 +26,5 @@ mcp>=2.0
 # torch 建议先单独安装 CPU 版（避免 PyPI 默认拉取数 GB 的 CUDA 依赖）：
 #   pip install torch --index-url https://download.pytorch.org/whl/cpu
 torch>=2.5.0
+# MySQL 存储（CLAIM_STORE_URL=mysql://… 时需要）
+pymysql>=1.1.0

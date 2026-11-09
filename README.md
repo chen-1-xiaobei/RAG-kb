@@ -710,6 +710,69 @@ admission_wait_seconds{quantile="0.95"}            # 排队时长分布
 - 限流只覆盖"贵的那一段"。廉价路径（拒答、健康检查、指标）不会被准入拒绝。
 - 令牌桶是**进程内**实现，重启即重置。
 
+## 存储：从 SQLite 迁到 MySQL（分期进行）
+
+**为什么迁**：不是为了性能。压测里 SQLite 从未出现在瓶颈段。真正的原因是
+**多副本部署**——三个库文件（`conversations.db` / `claims.db` / `checkpoints.db`）
+在每台机器各一份，A 机建的会话在 B 机上就是"不存在"。**这时候共享数据库是正确性需求，
+不是优化。**
+
+### 分期与状态
+
+| 期 | 范围 | 状态 | 验收 |
+| --- | --- | --- | --- |
+| 1 | **报销提案 + 审计**（`proposals` / `claim_audit`） | ✅ 已完成 | 16 条写操作用例跑两个后端，**全绿** |
+| 2 | 会话与轮次（事务语义最难：`BEGIN IMMEDIATE` 没有对应物） | 待做 | 并发追加 10 线程只有一个成功 |
+| 3 | checkpointer（社区包 `langgraph-checkpoint-mysql`，版本兼容需实测） | 待做 | 4 个 checkpoint 能被 `get_tuple` 读回 |
+| 4 | CI 加 MySQL service + 部署文档 | 待做 | CI 绿 |
+
+### 第 1 期怎么做的
+
+```bash
+# 建表（应用启动也会自动建）
+mysql -u rag_kb -p rag_kb < deploy/mysql-schema.sql
+
+# 打开 MySQL 后端（不设则仍用本地 SQLite，行为与迁移前完全一致）
+CLAIM_STORE_URL='mysql://rag_kb:密码@127.0.0.1:3306/rag_kb' python -m uvicorn app:app
+
+# 契约测试：同一批用例跑两个实现
+MYSQL_DSN='mysql://rag_kb:密码@127.0.0.1:3306/rag_kb' python -m pytest tests/test_claims.py -q
+```
+
+**关键不是"能连上"，是"行为一致"**：`tests/test_claims.py` 的 `store` fixture 参数化了
+两个后端，16 个用例（幂等提交、越权、策略拒绝、审计留痕、结果码）在 MySQL 上逐条通过。
+
+### 三处刻意的取舍
+
+1. **时间戳继续用 `VARCHAR(32)` 存 ISO-8601**，不用 `DATETIME`/`TIMESTAMP`：
+   后者带时区语义（`TIMESTAMP` 会随时区转换），而 `Proposal.created_at` 是 `str`，
+   ISO 字符串的字典序又等于时间序。**存储层不引入时区，语义就不变。**
+2. **`commit()` 与 SQLite 版逐字一致**：单条条件 `UPDATE … WHERE status='pending'`，
+   靠 `rowcount` 判定。MySQL 的 UPDATE 是当前读 + 行锁，所以并发提交同样只有一个
+   能拿到 `rowcount == 1`——**不需要额外加锁，也不需要先读后写**。
+3. **`autocommit=True`** 对齐 SQLite 的 `isolation_level=None`：每条语句各自成事务，
+   状态迁移靠单条语句的原子性，而不是跨语句的显式事务。
+
+### 迁移中发现的一个"测试侧泄漏"
+
+原来有一条测试直接用 `store._connect()` 跑裸 SQL：
+
+```python
+with store._connect() as conn:                       # ← 只有 SQLite 有这个方法
+    row = conn.execute("SELECT * FROM claim_audit WHERE result = ?", ...)
+```
+
+换成 MySQL 立刻 `AttributeError: 'MySQLClaimStore' object has no attribute 'path'`。
+**测试依赖实现细节，和业务代码依赖实现细节一样有害**——改成走公开的 `audit_rows("")`
+（被拒提案的 `proposal_id` 为空串）之后，两个后端都能跑。
+
+### 已知边界
+
+- 只有报销这一层接了 MySQL，**会话与 checkpoint 仍是本地 SQLite**——所以现在还不能多副本。
+- MySQL 事务隔离默认 `REPEATABLE-READ`：**不要**在应用层"先 SELECT 再判断再 UPDATE"
+  （快照读可能给出过期的判断依据），必须坚持"条件 UPDATE + rowcount"。
+- CI 默认不跑 MySQL 参数（没配 `MYSQL_DSN` 时自动跳过），第 4 期再补 service。
+
 ## 测试与评测
 
 ```powershell

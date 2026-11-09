@@ -34,9 +34,28 @@ def _lodging(amount=1000.0, nights=2, tier="一线", invoices=("inv-1",)):
                  invoice_ids=invoices)
 
 
-@pytest.fixture()
-def store(tmp_path):
-    return ClaimStore(tmp_path / "claims.db")
+@pytest.fixture(params=["sqlite", "mysql"])
+def store(request, tmp_path):
+    """同一批用例跑两个存储实现：**契约一致才算迁移成功**。
+
+    MySQL 参数依赖 `MYSQL_DSN` 环境变量；没配就跳过（CI 默认只跑 sqlite）。
+    每个用例前清表，保证与 tmp_path 里的 SQLite 文件同样的隔离度。
+    """
+    if request.param == "sqlite":
+        yield ClaimStore(tmp_path / "claims.db")
+        return
+
+    import os
+
+    dsn = os.getenv("MYSQL_DSN")
+    if not dsn:
+        pytest.skip("未设置 MYSQL_DSN，跳过 MySQL 参数")
+    from mysql_claims import MySQLClaimStore
+
+    mysql_store = MySQLClaimStore(dsn)
+    mysql_store.reset()
+    yield mysql_store
+    mysql_store.close()
 
 
 # ---------- 策略 ----------
@@ -187,12 +206,18 @@ def test_propose_and_commit_are_audited(store):
 
 
 def test_rejected_proposal_is_audited(store):
-    """被策略拒绝也要留痕——审计关注的是"有人尝试过什么"。"""
+    """被策略拒绝也要留痕——审计关注的是"有人尝试过什么"。
+
+    注意走的是公开的 `audit_rows()`，不再用 `store._connect()` 跑裸 SQL：
+    后者只对 SQLite 成立，是典型的"测试依赖实现细节"，换存储就会崩。
+    被拒提案没有提案号（`proposal_id` 为空串），所以按空串查。
+    """
     propose_claim_impl(_lodging(amount=9999.0), ALICE, CONV, store)
-    with store._connect() as conn:
-        row = conn.execute("SELECT * FROM claim_audit WHERE result = ?",
-                           (REJECTED_BY_POLICY,)).fetchone()
-    assert row is not None and row["action"] == "propose"
+
+    rows = store.audit_rows("")
+    assert len(rows) == 1
+    assert rows[0]["action"] == "propose"
+    assert rows[0]["result"] == REJECTED_BY_POLICY
 
 
 # ---------- 渲染 ----------
