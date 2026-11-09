@@ -523,10 +523,10 @@ count() -> int
 | 需要 ANN 索引（十万级以上） | 线性扫描开始变慢 | ❌ 20,000 条仍只要 32ms |
 | 多副本共享同一份**可写**索引 | 每个副本本地文件不共享 | ❌ 索引是只读的，可烧进镜像 |
 
-**步骤**（在新环境上做，本机没有 Docker 无法验证）：
+**步骤**（在新环境上做；本机是 Windows 且未装 WSL2、可用内存约 5GB，**无法本地验证**）：
 
 ```bash
-# 1. 起服务（deploy/milvus-compose.yml 未在本机验证过，第一次请逐步确认）
+# 1. 起服务（镜像版本已按 milvus 官方 compose 校对；需 ≥8GB 内存）
 docker compose -f deploy/milvus-compose.yml up -d
 curl -f http://<host>:9091/healthz
 
@@ -539,6 +539,14 @@ python scripts/verify_milvus.py --uri http://<host>:19530 --expect 126
 # 4. 指标必须与 json 后端完全一致
 MILVUS_URI=http://<host>:19530 VECTOR_BACKEND=milvus python evaluate.py
 ```
+
+**镜像选择上踩过两个坑**（写在这里省得再试一次）：
+
+- **`docker.io/minio/minio` 已经从 Docker Hub 撤下**（仓库直接 404），Bitnami 的
+  镜像目录也清空了。Milvus 官方改用自建镜像 `milvusdb/minio`。
+- 官方 compose 里的版本是 **milvus v3.0.5 / etcd v3.5.25**，不是网上教程常见的
+  v2.5.x；另外多了一个 `milvus-volume-init` 一次性任务（给数据卷改属主），
+  缺了它首次启动可能因卷权限失败。
 
 **第 3 步的第 3 项（元数据）值得单独说**：索引"是用哪个 embedding 模型建的、多少维、
 什么度量"现在存在**库里的元数据表**（`<collection>__meta`），不是本地旁车文件。

@@ -1,24 +1,56 @@
 # Milvus standalone（etcd + MinIO + milvus）。
 #
-# ⚠️ 本机没有 Docker，**这份文件没有在本机验证过**。第一次使用请按
-#    README「向量后端 → 迁移到 standalone」的步骤逐步验证，不要直接上生产。
+# 镜像版本参照 milvus-io/milvus 官方 deployments/docker/standalone/docker-compose.yml
+# 校对过（2026-11 官方为 milvus v3.0.5 / etcd v3.5.25 / milvusdb/minio）。
 #
-# 用途：把向量索引从"每副本一份本地文件"变成"多副本共享一份服务"。
-# 这是 Milvus 相对 milvus-lite 唯一不可替代的地方——单机、126 chunk 的场景
-# 用不上它（实测比 numpy 全量点积慢约 48 倍，见 README）。
+# ⚠️ 三个必须知道的事实：
+#
+# 1. **本机没法验证**：Windows 上跑它需要 WSL2（未安装，装完要重启），
+#    且 Milvus standalone 官方建议 ≥8GB 内存，本机可用只有 5GB 出头。
+#    所以这份文件是"按官方模板改的、镜像 tag 已核实存在"，但**没有真正起过**。
+# 2. **MinIO 不能用 docker.io/minio/minio**：该仓库已从 Docker Hub 撤下（404），
+#    Bitnami 的镜像目录也已清空。Milvus 官方改用自建镜像 milvusdb/minio。
+# 3. 端口 19530 给 SDK 连接，9091 给健康检查。灌完索引后跑
+#    `python scripts/verify_milvus.py --uri http://<host>:19530 --expect 126` 验收。
 #
 # 启动：  docker compose -f deploy/milvus-compose.yml up -d
-# 健康：  docker compose -f deploy/milvus-compose.yml ps
-# 地址：  http://<host>:19530
+# 状态：  docker compose -f deploy/milvus-compose.yml ps
+# 停止：  docker compose -f deploy/milvus-compose.yml down
 #
-# 客户端只需两个环境变量：
+# 客户端只需要两个环境变量：
 #   MILVUS_URI=http://<host>:19530
 #   MILVUS_COLLECTION=kb_chunks
 
+x-milvus-image: &milvus-image milvusdb/milvus:v3.0.5
+
 services:
+  # 一次性任务：把数据卷的属主改成容器内 milvus 用户。
+  # 官方 compose 里有这一步，缺了它首次启动可能因卷权限失败。
+  milvus-volume-init:
+    image: *milvus-image
+    container_name: rag-kb-milvus-init
+    user: "0:0"
+    network_mode: none
+    read_only: true
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        uid="$$(id -u milvus)"
+        gid="$$(id -g milvus)"
+        marker="/var/lib/milvus/.milvus-volume-owner-$${uid}-$${gid}"
+        if [ ! -e "$${marker}" ]; then
+          chown -R "$${uid}:$${gid}" /var/lib/milvus
+          touch "$${marker}"
+          chown "$${uid}:$${gid}" "$${marker}"
+        fi
+    volumes:
+      - milvus-data:/var/lib/milvus
+
   etcd:
+    image: quay.io/coreos/etcd:v3.5.25
     container_name: rag-kb-etcd
-    image: quay.io/coreos/etcd:v3.5.16
     environment:
       - ETCD_AUTO_COMPACTION_MODE=revision
       - ETCD_AUTO_COMPACTION_RETENTION=1000
@@ -37,31 +69,30 @@ services:
       retries: 3
 
   minio:
+    image: milvusdb/minio:RELEASE.2024-12-18T13-15-44Z
     container_name: rag-kb-minio
-    image: minio/minio:RELEASE.2024-05-10T01-41-38Z
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-    command: minio server /minio_data --console-address ":9001"
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
     volumes:
       - minio-data:/minio_data
+    command: minio server /minio_data --console-address ":9001"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: ["CMD", "mc", "ready", "local"]
       interval: 30s
       timeout: 20s
       retries: 3
 
   milvus:
+    image: *milvus-image
     container_name: rag-kb-milvus
-    image: milvusdb/milvus:v2.5.4
     command: ["milvus", "run", "standalone"]
     security_opt:
       - seccomp:unconfined
     environment:
+      MINIO_REGION: us-east-1          # 官方 compose 有这一项，缺了连 MinIO 可能报 region
       ETCD_ENDPOINTS: etcd:2379
       MINIO_ADDRESS: minio:9000
-      # 语料从 126 chunk 涨到十万级时，把这里的内存上限一起调大
-      # （AUTOINDEX 在小数据上是暴力检索，规模上来才会真正用上索引）
     volumes:
       - milvus-data:/var/lib/milvus
     healthcheck:
@@ -71,13 +102,21 @@ services:
       timeout: 20s
       retries: 3
     ports:
-      - "19530:19530"   # SDK 连接端口
-      - "9091:9091"     # 健康检查 / metrics
+      - "19530:19530"   # SDK
+      - "9091:9091"     # healthz / metrics
     depends_on:
-      - etcd
-      - minio
+      milvus-volume-init:
+        condition: service_completed_successfully
+      etcd:
+        condition: service_started
+      minio:
+        condition: service_started
 
 volumes:
   etcd-data:
   minio-data:
   milvus-data:
+
+networks:
+  default:
+    name: rag-kb-milvus
