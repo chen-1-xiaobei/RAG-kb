@@ -1,0 +1,83 @@
+# Milvus standalone（etcd + MinIO + milvus）。
+#
+# ⚠️ 本机没有 Docker，**这份文件没有在本机验证过**。第一次使用请按
+#    README「向量后端 → 迁移到 standalone」的步骤逐步验证，不要直接上生产。
+#
+# 用途：把向量索引从"每副本一份本地文件"变成"多副本共享一份服务"。
+# 这是 Milvus 相对 milvus-lite 唯一不可替代的地方——单机、126 chunk 的场景
+# 用不上它（实测比 numpy 全量点积慢约 48 倍，见 README）。
+#
+# 启动：  docker compose -f deploy/milvus-compose.yml up -d
+# 健康：  docker compose -f deploy/milvus-compose.yml ps
+# 地址：  http://<host>:19530
+#
+# 客户端只需两个环境变量：
+#   MILVUS_URI=http://<host>:19530
+#   MILVUS_COLLECTION=kb_chunks
+
+services:
+  etcd:
+    container_name: rag-kb-etcd
+    image: quay.io/coreos/etcd:v3.5.16
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - etcd-data:/etcd
+    command: >
+      etcd -advertise-client-urls=http://etcd:2379
+      -listen-client-urls=http://0.0.0.0:2379
+      --data-dir /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  minio:
+    container_name: rag-kb-minio
+    image: minio/minio:RELEASE.2024-05-10T01-41-38Z
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: minio server /minio_data --console-address ":9001"
+    volumes:
+      - minio-data:/minio_data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  milvus:
+    container_name: rag-kb-milvus
+    image: milvusdb/milvus:v2.5.4
+    command: ["milvus", "run", "standalone"]
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      # 语料从 126 chunk 涨到十万级时，把这里的内存上限一起调大
+      # （AUTOINDEX 在小数据上是暴力检索，规模上来才会真正用上索引）
+    volumes:
+      - milvus-data:/var/lib/milvus
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      start_period: 90s
+      timeout: 20s
+      retries: 3
+    ports:
+      - "19530:19530"   # SDK 连接端口
+      - "9091:9091"     # 健康检查 / metrics
+    depends_on:
+      - etcd
+      - minio
+
+volumes:
+  etcd-data:
+  minio-data:
+  milvus-data:

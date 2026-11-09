@@ -146,6 +146,47 @@ def test_records_exposes_text_and_metadata(backend):
     assert by_text["住宿标准 500"]["source"] == "a.md"
 
 
+# ---------------------------------------------------------------------------
+# 索引元数据：必须存在存储里，而不是本地旁车文件
+# ---------------------------------------------------------------------------
+
+def test_index_metadata_is_readable_after_reopen(tmp_path):
+    """"索引是用哪个模型建的"必须能从存储本身读回来。
+
+    早先 Milvus 后端把元数据写在 <db>.meta.json 旁车文件里，服务模式
+    （MILVUS_URI=http://…）下根本没有本地文件，这个校验就永远被跳过——
+    换 embedding 模型后索引不兼容却查不出来。现在改成写进库里的元数据表。
+    """
+    pytest.importorskip("pymilvus", reason="未安装 pymilvus")
+    from milvus_store import MilvusVectorStore
+
+    uri = str(tmp_path / "meta.db")
+    MilvusVectorStore.build(documents(), embedding=FakeEmbedding(), uri=uri,
+                            collection="meta_chunks")
+    reopened = MilvusVectorStore.open(embedding=FakeEmbedding(), uri=uri,
+                                      collection="meta_chunks")
+    assert reopened.index_metadata["embedding_model"] == "fake-embedding"
+    assert reopened.index_metadata["record_count"] == 4
+    assert reopened.count() == 4
+
+
+def test_open_rejects_embedding_model_mismatch(tmp_path):
+    """换模型后旧索引必须被拒绝，而不是默默返回错分。"""
+    pytest.importorskip("pymilvus", reason="未安装 pymilvus")
+    from vector_backend import BackendConfigError
+    from milvus_store import MilvusVectorStore
+
+    class OtherEmbedding(FakeEmbedding):
+        model_name = "another-embedding"
+
+    uri = str(tmp_path / "mismatch.db")
+    MilvusVectorStore.build(documents(), embedding=FakeEmbedding(), uri=uri,
+                            collection="mismatch_chunks")
+    with pytest.raises(BackendConfigError):
+        MilvusVectorStore.open(embedding=OtherEmbedding(), uri=uri,
+                               collection="mismatch_chunks")
+
+
 def test_count_matches_records(backend):
     assert backend.count() == len(backend.records()) == 4
 

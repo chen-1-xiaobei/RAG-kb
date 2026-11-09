@@ -35,6 +35,13 @@ MAX_TEXT_LENGTH = 65535
 MAX_META_LENGTH = 8192
 MAX_ID_LENGTH = 128
 MAX_GROUP_LENGTH = 64
+# 元数据表后缀：存"索引是用哪个 embedding 模型建的、多少条、什么距离度量"。
+# 为什么不放本地旁车文件：服务模式（MILVUS_URI=http://…）下没有本地文件，
+# 多副本也各自一份，校验会永远跳过——换模型后索引不兼容却查不出来。
+META_SUFFIX = "__meta"
+META_KEY_FIELD = "meta_key"
+META_VALUE_FIELD = "meta_value"
+META_DUMMY_FIELD = "dummy"       # Milvus 要求集合必须有向量字段，1 维哑向量不参与检索
 
 
 def _is_local(uri: str) -> bool:
@@ -42,7 +49,7 @@ def _is_local(uri: str) -> bool:
 
 
 def meta_path_for(uri: str) -> Path:
-    """本地库的元数据旁车文件。独立服务模式没有本地文件，返回 no-op 路径。"""
+    """旧版本的本地旁车文件路径（仅作为读取时的兼容回退）。"""
     return Path(f"{uri}.meta.json")
 
 
@@ -87,7 +94,7 @@ class MilvusVectorStore:
         # 重新打开本地库时 collection 会处于 released 状态，必须先 load 才能检索。
         # 这不是可选的优化——不调用会直接报 "call load() before search/get/query"。
         client.load_collection(collection)
-        metadata = cls._read_meta(uri)
+        metadata = cls._read_meta(client, collection, uri)
         model_name = getattr(embedding, "model_name", None)
         indexed_model = metadata.get("embedding_model")
         if indexed_model and model_name and indexed_model != model_name:
@@ -138,10 +145,7 @@ class MilvusVectorStore:
             "collection": collection,
             "metric": metric,
         }
-        if _is_local(uri):
-            meta_path_for(uri).write_text(
-                json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
+        cls._write_meta(client, collection, metadata)
         return cls(embedding, client, collection, metric, metadata)
 
     @classmethod
@@ -162,17 +166,74 @@ class MilvusVectorStore:
             collection_name=collection, schema=schema, index_params=index_params
         )
 
+    # ---------- 索引元数据：存在库里，不依赖本地文件 ----------
+
     @classmethod
-    def _read_meta(cls, uri: str) -> dict[str, Any]:
-        if not _is_local(uri):
-            return {}
-        path = meta_path_for(uri)
-        if not path.exists():
-            return {}
+    def _meta_collection(cls, collection: str) -> str:
+        return f"{collection}{META_SUFFIX}"
+
+    @classmethod
+    def _write_meta(cls, client, collection: str, metadata: dict[str, Any]) -> None:
+        """把元数据写成一张小表的若干行。
+
+        Milvus 不允许集合没有向量字段，所以带一个 1 维哑向量；它不参与检索，
+        只是让这张表能被 load / query。
+        """
+        from pymilvus import DataType
+
+        name = cls._meta_collection(collection)
+        if client.has_collection(name):
+            client.drop_collection(name)
+        schema = client.create_schema(auto_id=False, enable_dynamic_field=False)
+        schema.add_field(META_KEY_FIELD, DataType.VARCHAR, is_primary=True, max_length=64)
+        schema.add_field(META_VALUE_FIELD, DataType.VARCHAR, max_length=4096)
+        schema.add_field(META_DUMMY_FIELD, DataType.FLOAT_VECTOR, dim=1)
+        index_params = client.prepare_index_params()
+        index_params.add_index(
+            field_name=META_DUMMY_FIELD, index_type="AUTOINDEX", metric_type="L2"
+        )
+        client.create_collection(collection_name=name, schema=schema,
+                                 index_params=index_params)
+        client.insert(collection_name=name, data=[
+            {META_KEY_FIELD: key,
+             META_VALUE_FIELD: json.dumps(value, ensure_ascii=False),
+             META_DUMMY_FIELD: [0.0]}
+            for key, value in metadata.items()
+        ])
+
+    @classmethod
+    def _read_meta(cls, client, collection: str, uri: str) -> dict[str, Any]:
+        """先读库里的元数据表；读不到再回退到旧版本的本地旁车文件。"""
+        from_metadata = cls._read_meta_from_collection(client, collection)
+        if from_metadata:
+            return from_metadata
+        if _is_local(uri):
+            path = meta_path_for(uri)
+            if path.exists():
+                try:
+                    return json.loads(path.read_text(encoding="utf-8"))
+                except json.JSONDecodeError:
+                    return {}
+        return {}
+
+    @classmethod
+    def _read_meta_from_collection(cls, client, collection: str) -> dict[str, Any]:
+        name = cls._meta_collection(collection)
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
+            if not client.has_collection(name):
+                return {}
+            client.load_collection(name)
+            rows = client.query(collection_name=name, filter=f'{META_KEY_FIELD} != ""',
+                                output_fields=[META_KEY_FIELD, META_VALUE_FIELD])
+        except Exception:      # 元数据表损坏不应让整个检索不可用
             return {}
+        metadata: dict[str, Any] = {}
+        for row in rows:
+            try:
+                metadata[row[META_KEY_FIELD]] = json.loads(row[META_VALUE_FIELD])
+            except (json.JSONDecodeError, KeyError):
+                continue
+        return metadata
 
     # ---------- 检索 ----------
 

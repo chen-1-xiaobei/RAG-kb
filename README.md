@@ -512,6 +512,39 @@ count() -> int
 **因此默认后端是 `json`。** 这是一次"做了、测了、如实不用"的取舍——
 和 BM25（无收益默认关闭）、GraphRAG（权限不成立未合入）是同一个判断方式。
 
+### 什么时候才真的该换（迁移到 standalone）
+
+**milvus-lite 是本地文件，多副本之间不共享。** 所以"多副本共享一份可写索引"
+必须用 **Milvus standalone**（etcd + MinIO + milvus 服务）。只有这三种情况值得换：
+
+| 情况 | 为什么 | 现在满足吗 |
+| --- | --- | --- |
+| 语料大到装不进内存 | json 后端是全量装内存 + 暴力点积 | ❌ 126 chunk，几百 KB |
+| 需要 ANN 索引（十万级以上） | 线性扫描开始变慢 | ❌ 20,000 条仍只要 32ms |
+| 多副本共享同一份**可写**索引 | 每个副本本地文件不共享 | ❌ 索引是只读的，可烧进镜像 |
+
+**步骤**（在新环境上做，本机没有 Docker 无法验证）：
+
+```bash
+# 1. 起服务（deploy/milvus-compose.yml 未在本机验证过，第一次请逐步确认）
+docker compose -f deploy/milvus-compose.yml up -d
+curl -f http://<host>:9091/healthz
+
+# 2. 灌索引
+MILVUS_URI=http://<host>:19530 VECTOR_BACKEND=milvus python ingest.py
+
+# 3. 连上去前的四项验收（连通 / 条数 / 元数据 / 带权限过滤的检索）
+python scripts/verify_milvus.py --uri http://<host>:19530 --expect 126
+
+# 4. 指标必须与 json 后端完全一致
+MILVUS_URI=http://<host>:19530 VECTOR_BACKEND=milvus python evaluate.py
+```
+
+**第 3 步的第 3 项（元数据）值得单独说**：索引"是用哪个 embedding 模型建的、多少维、
+什么度量"现在存在**库里的元数据表**（`<collection>__meta`），不是本地旁车文件。
+早先放旁车文件时，服务模式根本读不到，换模型后索引不兼容却查不出来——这是"把状态放在
+正确的位置"的一个实例：**多副本共享的东西，不能存在某一台的本地磁盘上。**
+
 ## 推理设备：CPU 与 GPU
 
 精排（568M cross-encoder）是整条链路里最贵的一步。把它放到 GPU 上，是**唯一一个
