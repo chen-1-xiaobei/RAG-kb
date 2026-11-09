@@ -36,6 +36,7 @@ from auth import Principal, get_principal
 import cassette
 from checkpointing import build_checkpointer, latest_thread, trace_steps, turn_thread_id
 import obs
+from llm_usage import record_usage
 from claims import ClaimStore, render
 from clarification import REFUSAL_TEXT, decide
 from config import settings
@@ -126,7 +127,7 @@ def get_answer_chain():
     """答案链同样惰性构造：with_structured_output 需要 LLM 客户端。"""
     global _answer_chain
     if _answer_chain is None:
-        _answer_chain = prompt | get_llm().with_structured_output(AnswerDraft)
+        _answer_chain = prompt | get_llm().with_structured_output(AnswerDraft, include_raw=True)
     return _answer_chain
 
 # agent 节点（信息获取决策）与答案节点（生成约束）提示词分离：
@@ -237,7 +238,10 @@ def generate_answer(question: str, hits, conversation_id: str) -> AskResponse:
         return finalize_answer(question, hits, None, conversation_id)
     docs = [doc for doc, _ in hits]
     started = perf_counter()
-    draft = get_answer_chain().invoke({"context": format_docs(docs), "question": question})
+    raw_result = get_answer_chain().invoke({"context": format_docs(docs), "question": question})
+    # include_raw=True：结构化输出只给解析后的对象，token 用量在原始消息里
+    record_usage(raw_result.get("raw"), stage="answer_generate")
+    draft = raw_result["parsed"]
     logger.info(
         "answer_generate hits=%d citations=%s insufficient=%s ms=%d",
         len(hits), draft.citations, draft.insufficient_context, (perf_counter() - started) * 1000,
@@ -264,6 +268,7 @@ def _agent_agent(state: AgentState, config: RunnableConfig | None = None) -> dic
         [SystemMessage(AGENT_SYSTEM_PROMPT), *history, *state["messages"]]
     )
     elapsed_ms = (perf_counter() - started) * 1000
+    record_usage(response, stage="agent_decision")
     calls = getattr(response, "tool_calls", None) or []
     logger.info(
         "agent_decision round=%d action=%s tools=%s ms=%d",

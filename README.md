@@ -345,25 +345,58 @@ $ curl -H "X-Dev-User: alice" -H "X-Dev-Groups: %E8%B4%A2%E5%8A%A1" \
 
 | 指标 | 类型 | 说明 |
 | --- | --- | --- |
-| `rag_requests_total{endpoint,status}` | counter | `status` 取 `ok` / `refused` / `clarify` / `error` |
+| `rag_requests_total{endpoint,status}` | counter | `status` 取 `ok` / `refused` / `clarify` / `error` / `rejected` |
 | `rag_latency_seconds{endpoint,stage}` | summary | 端到端耗时 |
-| `rag_stage_seconds{stage}` | summary | `coarse` / `rerank` 分段耗时 |
+| `rag_stage_seconds{stage}` | summary | `coarse` / `rerank` / `admission_wait` 分段耗时 |
 | `rag_tool_calls_total{tool,status}` | counter | 工具调用与失败 |
 | `rag_rerank_cache_total{result}` | counter | 精排缓存命中/未命中 |
 | `rag_agent_rounds{endpoint}` | summary | agent 轮数分布 |
 | `rag_retrieval_hits_total` | counter | 命中条数累计 |
+| `admission_rejected_total{reason}` | counter | 准入拒绝：`rate_limited` / `queue_full` / `queue_timeout` |
+| `admission_wait_seconds` | summary | 排队时长分布 |
+| `admission_queue_depth` / `admission_in_flight` | gauge | 队列深度、正在执行数 |
+| **`rag_llm_tokens_total{direction,stage,model}`** | counter | 输入/输出 token，按"决策/生成"分段 |
+| **`rag_llm_cost_total{currency,stage}`** | counter | 成本（需配单价，见下） |
+| **`rag_llm_usage_missing_total{stage}`** | counter | 拿不到用量的次数（**不是 0 成本，是没有数据**） |
 
 实际输出片段：
 
 ```
 rag_requests_total{endpoint="agent",status="refused"} 1
-rag_requests_total{endpoint="ask",status="refused"} 1
 rag_stage_seconds{stage="coarse",quantile="0.5"} 0.0682
 rag_stage_seconds{stage="rerank",quantile="0.5"} 3.5457
-rag_rerank_cache_total{result="miss"} 8
+rag_llm_tokens_total{direction="prompt",model="deepseek-chat",stage="agent_decision"} 4120
+rag_llm_tokens_total{direction="completion",model="deepseek-chat",stage="agent_decision"} 167
+rag_llm_cost_total{currency="CNY",stage="agent_decision"} 0.004454
 ```
 
-**这张表直接回答了"慢在哪"**：粗排 68ms、精排 3546ms，精排占 98%——不用翻日志。
+**这张表直接回答了"慢在哪、贵在哪"**：
+
+- 慢：粗排 68ms、精排 3546ms → 精排占 98%
+- 贵：一次问答 **prompt 4120 / completion 167**，prompt 是输出的 **25 倍**——
+  工具 schema、系统提示与证据占了绝大部分。**想降成本先压 prompt，不是压输出长度。**
+
+成本单价必须自己配（不同模型/不同时间不同价）：
+
+```bash
+LLM_PRICE_INPUT_PER_MILLION=1 LLM_PRICE_OUTPUT_PER_MILLION=2 LLM_PRICE_CURRENCY=CNY
+```
+
+**默认不配就不输出 `rag_llm_cost_total`**——一个恒为 0 的成本比没有更危险，
+它会让人以为这个系统不花钱。
+
+### 过程指标：工具选择正确率
+
+端到端指标（召回、答案正确率）看不出"模型选错了工具"。这部分用
+`scripts/check_agent_behavior.py` 的 10 个场景统计，且**把两类错误分开记**：
+
+| 错误类型 | 代价 | 统计字段 |
+| --- | --- | --- |
+| **漏调**（该调没调） | 用户拿不到结果，无副作用 | `missing_calls` |
+| **误调**（不该调却调了） | 若误的是写工具，会生成提案甚至提交 | `forbidden_calls` |
+
+实测（当前提示词）：**10/10，漏调 0 次，误调禁止工具 0 次**。详见
+`eval-results/agent-behavior.json` 的 `summary` 字段。
 
 抓取配置：
 

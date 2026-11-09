@@ -79,6 +79,14 @@ class Settings:
     embedding_device: str = os.getenv("EMBEDDING_DEVICE", "auto")
     # 精排用 fp16（仅 GPU 有效）：显存减半、通常更快，数值差异更大，需评测确认
     rerank_fp16: bool = _bool_env("RERANK_FP16", False)
+    # ---- 成本记账 ----
+    # 单价必须自己配：不同模型/不同时间价格不同，硬编码一定过时。
+    # 默认 0 = 不输出成本指标——一个恒为 0 的成本比没有更危险，会让人以为不花钱。
+    # 例：若输入 1 元/百万 token、输出 2 元/百万 token：
+    #   LLM_PRICE_INPUT_PER_MILLION=1  LLM_PRICE_OUTPUT_PER_MILLION=2
+    llm_price_input_per_million: float = float(os.getenv("LLM_PRICE_INPUT_PER_MILLION", "0"))
+    llm_price_output_per_million: float = float(os.getenv("LLM_PRICE_OUTPUT_PER_MILLION", "0"))
+    llm_price_currency: str = os.getenv("LLM_PRICE_CURRENCY", "CNY")
 
     def validate(self) -> None:
         if not 0 <= self.score_threshold <= 1:
